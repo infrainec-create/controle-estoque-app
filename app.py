@@ -104,6 +104,12 @@ def cadastrar_produto(nome: str):
         return True, f'Produto "{nome}" cadastrado com saldo zero.'
     except sqlite3.IntegrityError:
         return False, f'Já existe um produto com o nome "{nome}".'
+def deletar_produto(id_produto):
+    with get_conn() as conn:
+        # 1. Apaga primeiro as movimentações para manter a integridade do banco
+        conn.execute("DELETE FROM movimentacoes WHERE id_produto = ?", (id_produto,))
+        # 2. Apaga o produto do sistema
+        conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
 
 # ─── Inicialização ────────────────────────────────────────────────────────────
 init_db()
@@ -393,24 +399,47 @@ with aba_historico:
 # CADASTRAR PRODUTO
 # ══════════════════════════════════════════════════════════════════════════════
 with aba_cadastro:
-    st.subheader("Cadastrar novo produto")
-    nome_novo = st.text_input("Nome do produto", placeholder="Ex: Palete PBR")
+    col_cad, col_del = st.columns(2)
+    
+    # Coluna Esquerda: Cadastro
+    with col_cad:
+        st.subheader("➕ Cadastrar novo produto")
+        nome_novo = st.text_input("Nome do produto", placeholder="Ex: Palete PBR")
 
-    if st.button("✅ Cadastrar", type="primary", key="btn_cadastro"):
-        if not nome_novo.strip():
-            st.error("Informe um nome para o produto.")
-        else:
-            ok, msg = cadastrar_produto(nome_novo.strip())
-            if ok:
-                st.success(msg)
-                st.rerun()
+        if st.button("✅ Cadastrar", type="primary", key="btn_cadastro"):
+            if not nome_novo.strip():
+                st.error("Informe um nome para o produto.")
             else:
-                st.error(msg)
+                ok, msg = cadastrar_produto(nome_novo.strip())
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+                    
+    # Coluna Direita: Exclusão
+    with col_del:
+        st.subheader("🗑️ Excluir produto")
+        produtos_df = listar_produtos()
+        
+        if not produtos_df.empty:
+            opcoes_del = dict(zip(produtos_df["nome"], produtos_df["id"]))
+            nome_del = st.selectbox("Selecione para excluir", list(opcoes_del.keys()), key="del_prod")
+            
+            st.warning("⚠️ Aviso: Apagar o produto também apagará permanentemente todo o seu histórico no sistema.")
+            
+            if st.button("🗑️ Confirmar Exclusão", type="secondary"):
+                deletar_produto(opcoes_del[nome_del])
+                st.rerun()
+        else:
+            st.info("Nenhum produto para excluir.")
 
+    # Tabela embaixo
     st.divider()
-    st.subheader("Produtos cadastrados")
-    st.dataframe(
-        listar_produtos().rename(columns={"id": "ID", "nome": "Produto", "saldo_atual": "Saldo atual"}),
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.subheader("📦 Produtos cadastrados")
+    if not produtos_df.empty:
+        st.dataframe(
+            produtos_df.rename(columns={"id": "ID", "nome": "Produto", "saldo_atual": "Saldo atual"}),
+            use_container_width=True,
+            hide_index=True,
+        )
