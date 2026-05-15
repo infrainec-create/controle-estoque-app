@@ -1,6 +1,6 @@
 import streamlit as st
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 
 # ─── Configuração da página ───────────────────────────────────────────────────
@@ -83,13 +83,16 @@ def atualizar_saldo(conn, id_produto, novo_saldo):
     )
 
 def registrar_movimentacao(conn, id_produto, tipo, quantidade, saldo_resultante, obs):
+    # Puxa a hora global e subtrai 3 horas para travar no fuso UTC-3
+    data_hora_local = (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M")
+    
     conn.execute(
         """INSERT INTO movimentacoes
            (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (
             id_produto,
-            datetime.now().strftime("%d/%m/%Y %H:%M"),
+            data_hora_local,
             tipo,
             quantidade,
             saldo_resultante,
@@ -104,6 +107,7 @@ def cadastrar_produto(nome: str):
         return True, f'Produto "{nome}" cadastrado com saldo zero.'
     except sqlite3.IntegrityError:
         return False, f'Já existe um produto com o nome "{nome}".'
+
 def deletar_produto(id_produto):
     with get_conn() as conn:
         # 1. Apaga primeiro as movimentações para manter a integridade do banco
@@ -387,16 +391,18 @@ with aba_historico:
         st.divider()
         csv_data = converter_para_csv(df_filtrado)
         
+        # O nome do arquivo também pega o fuso corrigido
+        data_atual_local = (datetime.utcnow() - timedelta(hours=3)).strftime('%Y%m%d')
         st.download_button(
             label="📥 Baixar Dados Filtrados (CSV)",
             data=csv_data,
-            file_name=f"movimentacoes_estoque_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"movimentacoes_estoque_{data_atual_local}.csv",
             mime="text/csv",
             help="Faça o download do histórico atual para subir no SharePoint e conectar ao Power BI."
         )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CADASTRAR PRODUTO
+# CADASTRAR / GERENCIAR PRODUTOS
 # ══════════════════════════════════════════════════════════════════════════════
 with aba_cadastro:
     col_cad, col_del = st.columns(2)
