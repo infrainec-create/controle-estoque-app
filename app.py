@@ -278,14 +278,47 @@ with aba_ia:
     if st.button("✨ Gerar Diagnóstico Logístico"):
         df = listar_produtos()
         if not df.empty:
-            try:
-                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                mod_name = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
-                mod = genai.GenerativeModel(mod_name)
-                prompt = f"Analise o estoque e me dê alertas críticos considerando o consumo gerado pelas contagens semanais:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time']].to_string()}"
-                st.write(mod.generate_content(prompt).text)
-            except: st.error("Erro na conexão com IA.")
+            with st.spinner("A cruzar dados de consumo e a consultar a IA..."):
+                try:
+                    # 1. Puxa o consumo real para a IA não ficar cega
+                    with get_conn() as conn:
+                        cons = pd.read_sql("""
+                            SELECT id_produto, SUM(ABS(quantidade)) as consumo_total 
+                            FROM movimentacoes 
+                            WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) 
+                            GROUP BY id_produto
+                        """, conn)
+                    
+                    df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
+                    df['consumo_mensal'] = df['consumo_total'].astype(int)
+
+                    # 2. Configura a IA
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                    mod_name = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
+                    mod = genai.GenerativeModel(mod_name)
+                    
+                    # 3. Prepara a tabela com a nova coluna de consumo e envia o Prompt corrigido
+                    dados_para_ia = df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)
+                    
+                    prompt = f"""
+                    Você é um Analista Logístico Sénior de um armazém de e-commerce.
+                    Analise os dados da tabela abaixo. 
+                    - A coluna 'consumo_mensal' representa o consumo real dos últimos 30 dias.
+                    - A coluna 'lead_time' é o tempo de entrega do fornecedor EM DIAS.
+                    
+                    Com base no cruzamento matemático do saldo atual, consumo mensal e lead time, entregue:
+                    1) Um breve resumo da saúde do inventário.
+                    2) Alertas críticos de risco de ruptura (informando se o estoque acaba antes do fornecedor entregar).
+                    3) Sugestões precisas de ressuprimento.
+                    
+                    Dados:
+                    {dados_para_ia}
+                    """
+                    
+                    st.write(mod.generate_content(prompt).text)
+                except Exception as e: 
+                    st.error(f"Erro na conexão com IA: {e}")
 
 # HISTÓRICO
 with aba_historico:
