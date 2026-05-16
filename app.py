@@ -157,7 +157,6 @@ with aba_painel:
 
         st.divider()
 
-        # Adicionamos um gap (espaço) maior entre as duas colunas
         col1, col2 = st.columns(2, gap="large")
 
         with col1:
@@ -184,7 +183,6 @@ with aba_painel:
             df_compras["consumo_medio"] = df_compras["consumo"] / 4
             df_compras["Sugestão Compra"] = ((df_compras["consumo_medio"] * 4) + df_compras["estoque_minimo"] - df_compras["saldo_atual"]).clip(lower=0)
 
-            # Agora devidamente alinhado dentro do col2 e com colunas renomeadas de forma mais compacta
             st.dataframe(
                 df_compras[["Produto", "consumo", "consumo_medio", "estoque_minimo", "saldo_atual", "Sugestão Compra"]].rename(columns={
                     "saldo_atual": "Saldo", "consumo": "Consumo", "consumo_medio": "Média/Sem", 
@@ -193,25 +191,56 @@ with aba_painel:
                 width="stretch", hide_index=True
             )
 
-        st.divider()
-        st.markdown("### 📊 Produtos mais consumidos")
-        
-        # Proteção: Só gera gráfico se houver saídas registradas
-        if not movs_df.empty:
-            saidas_df = movs_df[movs_df["tipo"] == "Saída"]
-            if not saidas_df.empty:
-                grafico = saidas_df.groupby("produto")["quantidade"].sum().abs().sort_values(ascending=False)
-                st.bar_chart(grafico)
+            # ATUALIZAÇÃO 2: Gerador do Pedido de Compra
+            df_pedido = df_compras[df_compras["Sugestão Compra"] > 0]
+            if not df_pedido.empty:
+                texto_pedido = "🛒 *Pedido de Insumos de Limpeza*\n\n"
+                for index, row in df_pedido.iterrows():
+                    texto_pedido += f"• {row['Produto']}: {int(row['Sugestão Compra'])} un\n"
+                
+                st.text_area("📝 Copiar pedido para WhatsApp/E-mail:", value=texto_pedido, height=120)
             else:
-                st.info("Ainda não há saídas registradas para gerar o gráfico.")
+                st.success("✅ Estoque abastecido! Não há necessidade de compras no momento.")
+
+        st.divider()
+        
+        # ATUALIZAÇÃO 3: Gráficos de Consumo Lado a Lado
+        col_graf1, col_graf2 = st.columns(2, gap="large")
+        
+        with col_graf1:
+            st.markdown("### 📈 Histórico de Consumo")
+            if not movs_df.empty:
+                df_saidas = movs_df[movs_df["tipo"] == "Saída"].copy()
+                if not df_saidas.empty:
+                    # Converte as datas para o Pandas entender a ordem do tempo
+                    df_saidas["Data"] = pd.to_datetime(df_saidas["data_hora"], format="%d/%m/%Y %H:%M").dt.date
+                    
+                    # Agrupa as quantidades que saíram por dia e por produto
+                    consumo_tempo = df_saidas.groupby(["Data", "produto"])["quantidade"].sum().abs().reset_index()
+                    
+                    # Organiza a tabela para o gráfico de linha do Streamlit
+                    consumo_pivot = consumo_tempo.pivot(index="Data", columns="produto", values="quantidade").fillna(0)
+                    
+                    st.line_chart(consumo_pivot)
+                else:
+                    st.info("Registre saídas para visualizar o gráfico ao longo do tempo.")
+            else:
+                st.info("Ainda não há movimentações.")
+
+        with col_graf2:
+            st.markdown("### 📊 Produtos mais consumidos")
+            if not movs_df.empty:
+                saidas_df = movs_df[movs_df["tipo"] == "Saída"]
+                if not saidas_df.empty:
+                    grafico = saidas_df.groupby("produto")["quantidade"].sum().abs().sort_values(ascending=False)
+                    st.bar_chart(grafico)
+                else:
+                    st.info("Registre saídas para gerar o gráfico de barras.")
     else:
         st.info("Cadastre produtos para visualizar o painel.")
-
 # ═════════════════════════════════════════════════════════════
 # ENTRADA
-# ═════════════════════════════════════════════════════════════
-with aba_entrada:
-    st.subheader("Registrar Entrada")
+# ══════════════════════════════════════
     produtos_df = listar_produtos()
     if produtos_df.empty:
         st.warning("⚠️ Nenhum produto cadastrado. Vá até a aba 'Produtos' primeiro.")
