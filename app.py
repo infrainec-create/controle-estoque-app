@@ -10,13 +10,13 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 import numpy as np
+import threading
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO AVANÇADO
 # ─────────────────────────────────────────────────────────────
-st.set_page_config(page_title="WMS 4.0 - Inteligência Logística", page_icon="📦", layout="wide")
+st.set_page_config(page_title="WMS 4.0 - Alta Performance", page_icon="📦", layout="wide")
 
-# CSS Moderno e Responsivo
 st.markdown("""
     <style>
     .stButton>button {
@@ -46,8 +46,42 @@ DB_PATH = "estoque.db"
 FOLDER_ID = st.secrets["FOLDER_ID"]
 
 # ─────────────────────────────────────────────────────────────
-# CONEXÃO E SINCRONIZAÇÃO (DRIVE)
+# OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO (THREADING ASYNC)
 # ─────────────────────────────────────────────────────────────
+def executar_sincronizacao_drive():
+    """Roda de forma invisível em segundo plano sem congelar a interface do utilizador."""
+    try:
+        servico = obter_servico_drive()
+        query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
+        files = servico.files().list(q=query, fields="files(id)").execute().get('files', [])
+        media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+        if files: 
+            servico.files().update(fileId=files[0]['id'], media_body=media).execute()
+        else: 
+            servico.files().create(body={'name': DB_PATH, 'parents': [FOLDER_ID]}, media_body=media).execute()
+        
+        # Gera os espelhos CSV para o Looker Studio nos bastidores
+        with sqlite3.connect(DB_PATH) as conn:
+            prods = pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
+            movs = pd.read_sql("""
+                SELECT m.id, p.nome AS produto, m.data_hora, m.tipo, m.quantidade, m.saldo_resultante, m.observacao
+                FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto ORDER BY m.id DESC
+            """, conn)
+            
+        for df, name in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
+            q = f"name='{name}' and '{FOLDER_ID}' in parents"
+            fs = servico.files().list(q=q).execute().get('files', [])
+            m = MediaIoBaseUpload(BytesIO(df.to_csv(index=False).encode('utf-8-sig')), mimetype='text/csv')
+            if fs: servico.files().update(fileId=fs[0]['id'], media_body=m).execute()
+            else: servico.files().create(body={'name': name, 'parents': [FOLDER_ID]}, media_body=m).execute()
+    except:
+        pass
+
+def disparar_sincronizacao():
+    """Limpa o cache local instantaneamente e delega o upload à nuvem para outra Thread."""
+    st.cache_data.clear()
+    threading.Thread(target=executar_sincronizacao_drive).start()
+
 def obter_servico_drive():
     info_chaves = dict(st.secrets["gcp_service_account"])
     credenciais = service_account.Credentials.from_service_account_info(info_chaves)
@@ -68,29 +102,22 @@ def descarregar_do_drive():
     except: return False
     return False
 
-def sincronizar_tudo():
-    try:
-        servico = obter_servico_drive()
-        query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
-        files = servico.files().list(q=query, fields="files(id)").execute().get('files', [])
-        media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
-        if files: servico.files().update(fileId=files[0]['id'], media_body=media).execute()
-        else: servico.files().create(body={'name': DB_PATH, 'parents': [FOLDER_ID]}, media_body=media).execute()
-        
-        prods = listar_produtos()
-        movs = listar_movimentacoes()
-        for df, name in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
-            q = f"name='{name}' and '{FOLDER_ID}' in parents"
-            fs = servico.files().list(q=q).execute().get('files', [])
-            m = MediaIoBaseUpload(BytesIO(df.to_csv(index=False).encode('utf-8-sig')), mimetype='text/csv')
-            if fs: servico.files().update(fileId=fs[0]['id'], media_body=m).execute()
-            else: servico.files().create(body={'name': name, 'parents': [FOLDER_ID]}, media_body=m).execute()
-    except: pass
-
 # ─────────────────────────────────────────────────────────────
-# BANCO DE DADOS
+# OPTIMIZAÇÃO 2: MEMÓRIA EM CACHE (`@st.cache_data`)
 # ─────────────────────────────────────────────────────────────
 def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+@st.cache_data
+def listar_produtos():
+    with get_conn() as conn: return pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
+
+@st.cache_data
+def listar_movimentacoes():
+    with get_conn() as conn:
+        return pd.read_sql("""
+            SELECT m.id, p.nome AS produto, m.data_hora, m.tipo, m.quantidade, m.saldo_resultante, m.observacao
+            FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto ORDER BY m.id DESC
+        """, conn)
 
 def init_db():
     with get_conn() as conn:
@@ -115,16 +142,6 @@ def init_db():
             );
         """)
 
-def listar_produtos():
-    with get_conn() as conn: return pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
-
-def listar_movimentacoes():
-    with get_conn() as conn:
-        return pd.read_sql("""
-            SELECT m.id, p.nome AS produto, m.data_hora, m.tipo, m.quantidade, m.saldo_resultante, m.observacao
-            FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto ORDER BY m.id DESC
-        """, conn)
-
 def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time):
     try:
         with get_conn() as conn:
@@ -142,7 +159,7 @@ def deletar_produto(id_produto):
         conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO
+# INICIALIZAÇÃO CONTROLADA
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
     descarregar_do_drive()
@@ -153,7 +170,7 @@ if "db_sincronizado" not in st.session_state:
 # INTERFACE PRINCIPAL
 # ─────────────────────────────────────────────────────────────
 st.title("📦 WMS Inteligente")
-st.caption("Fulfillment & Logistics Operational Control")
+st.caption("Controle Operacional Avançado | Performance Otimizada")
 
 aba_painel, aba_operacao, aba_contagem, aba_ia, aba_historico, aba_gestao = st.tabs([
     "📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "🧠 IA Analista", "📜 Histórico", "⚙️ Config"
@@ -165,7 +182,7 @@ with aba_painel:
     if not df.empty:
         df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
         
-        # --- LÓGICA DE INTELIGÊNCIA LOGÍSTICA BASEADA EM INVENTÁRIO ---
+        # Coleta de consumo histórico baseado nas baixas
         with get_conn() as conn:
             cons = pd.read_sql("""
                 SELECT id_produto, SUM(ABS(quantidade)) as total 
@@ -177,7 +194,7 @@ with aba_painel:
         df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
         df['consumo_diario'] = df['total'] / 30
         
-        # Cálculo Seguro de Cobertura
+        # Cálculo Seguro de Cobertura (Runway)
         mask = df['consumo_diario'] > 0
         df['Runway'] = 999
         df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
@@ -190,29 +207,29 @@ with aba_painel:
         df['Status'] = df.apply(set_status, axis=1)
         df['Runway'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-        # Layout Adaptável
+        # Layout Responsivo
         c1, c2, c3, c4 = st.columns([1,1,1,1])
         c1.markdown(f'<div class="metric-card">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-card">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="metric-card">Itens Críticos<br><b>{(df["saldo_atual"] < df["estoque_minimo"]).sum()}</b></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="metric-card">Giro Total (Consumo)<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-card">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
 
         st.divider()
         st.subheader("📋 Posição de Estoque")
         st.dataframe(df[['Status', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'Runway']].rename(columns={'categoria':'Setor', 'nome':'Produto'}), hide_index=True, use_container_width=True)
 
         st.divider()
-        st.subheader("🛒 Sugestão de Reposição (Cálculo Semanal WMS)")
+        st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
         df["Minimo Ideal"] = (df["consumo_diario"] * df["lead_time"] * 1.2).astype(int)
         df["Alvo"] = df[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
         df["Sugestão Compra"] = (df["Alvo"] - df["saldo_atual"]).clip(lower=0)
         st.dataframe(df[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, use_container_width=True)
 
-# OPERAÇÃO (SAÍDAS E ENTRADAS)
+# OPERAÇÃO (SAÍDAS E ENTRADAS COM INVERSÃO E OBSERVAÇÕES)
 with aba_operacao:
     df = listar_produtos()
     if not df.empty:
-        col_e, col_s = st.columns(2) # Invertido: Entrada na esquerda, Saída na direita
+        col_e, col_s = st.columns(2) # Entrada Esquerda, Saída Direita
         
         with col_e:
             with st.container(border=True):
@@ -223,18 +240,15 @@ with aba_operacao:
                 sal_e = int(df.loc[df["id"]==id_pe, "saldo_atual"].values[0])
                 
                 c1, c2 = st.columns([1, 2])
-                with c1: 
-                    qe = st.number_input("Quantidade", min_value=1, key="e_q")
-                with c2: 
-                    obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
+                with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
+                with c2: obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
                     
                 if st.button("Confirmar Entrada", type="secondary"):
                     with get_conn() as conn:
                         conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ? WHERE id = ?", (qe, id_pe))
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        # Inserção incluindo a observação
-                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
-                    sincronizar_tudo()
+                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, Scientific_mode, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
+                    disparar_sincronizacao()
                     st.rerun()
 
         with col_s:
@@ -245,24 +259,21 @@ with aba_operacao:
                 max_s = int(df.loc[df["id"]==id_p, "saldo_atual"].values[0])
                 
                 c1, c2 = st.columns([1, 2])
-                with c1: 
-                    q = st.number_input("Quantidade", min_value=1, max_value=max(max_s, 1), key="s_q")
-                with c2: 
-                    obs_s = st.text_input("Observação/Destino", key="s_obs")
+                with c1: q = st.number_input("Quantidade", min_value=1, max_value=max(max_s, 1), key="s_q")
+                with c2: obs_s = st.text_input("Observação/Destino", key="s_obs")
                     
                 if st.button("Confirmar Saída", type="primary"):
                     with get_conn() as conn:
                         conn.execute("UPDATE produtos SET saldo_atual = saldo_atual - ? WHERE id = ?", (q, id_p))
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        # Inserção incluindo a observação
                         conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
-                    sincronizar_tudo()
+                    disparar_sincronizacao()
                     st.rerun()
 
 # ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM
 with aba_contagem:
     st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Utilize esta aba para realizar a contagem física semanal. O sistema gerará as taxas de consumo com base nas diferenças apuradas aqui.")
+    st.info("Aba dedicada para auditoria física. O consumo da operação é calculado através destas contagens.")
     df = listar_produtos()
     if not df.empty:
         with st.container(border=True):
@@ -272,31 +283,30 @@ with aba_contagem:
             s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
             
             st.metric("Saldo Atual no Sistema", f"{s_sis} un")
-            f_cont = st.number_input("Quantidade Física Contada na Prateleira", min_value=0, step=1, key="c_q")
+            f_cont = st.number_input("Quantidade Física Contada", min_value=0, step=1, key="c_q")
             
             diff = f_cont - s_sis
             if diff == 0: st.success("✅ Saldo bate perfeitamente com o sistema.")
-            elif diff < 0: st.warning(f"📉 Consumo/Baixa detectada: {abs(diff)} unidades retiradas desde o último controle.")
-            else: st.info(f"📈 Ajuste positivo: {diff} unidades adicionadas.")
+            elif diff < 0: st.warning(f"📉 Baixa/Consumo detectado: {abs(diff)} unidades utilizadas.")
+            else: st.info(f"📈 Ajuste positivo: {diff} unidades encontradas.")
             
             if st.button("💾 Gravar e Sincronizar Inventário", use_container_width=True, type="primary"):
                 with get_conn() as conn:
                     conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
                     data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                     conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, 'Inventário Semanal')", (id_pc, data, diff, f_cont))
-                sincronizar_tudo()
+                disparar_sincronizacao()
                 st.toast("Inventário Sincronizado!", icon="✅")
                 st.rerun()
 
-# IA ANALISTA
+# IA ANALISTA (COM HISTÓRICO DE CONSUMO REAL)
 with aba_ia:
     st.subheader("🧠 Assistente IA de Suprimentos")
     if st.button("✨ Gerar Diagnóstico Logístico"):
         df = listar_produtos()
         if not df.empty:
-            with st.spinner("A cruzar dados de consumo e a consultar a IA..."):
+            with st.spinner("Analisando dados com contexto de consumo..."):
                 try:
-                    # 1. Puxa o consumo real para a IA não ficar cega
                     with get_conn() as conn:
                         cons = pd.read_sql("""
                             SELECT id_produto, SUM(ABS(quantidade)) as consumo_total 
@@ -304,45 +314,43 @@ with aba_ia:
                             WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) 
                             GROUP BY id_produto
                         """, conn)
-                    
                     df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
                     df['consumo_mensal'] = df['consumo_total'].astype(int)
 
-                    # 2. Configura a IA
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                     mod_name = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
                     mod = genai.GenerativeModel(mod_name)
                     
-                    # 3. Prepara a tabela com a nova coluna de consumo e envia o Prompt corrigido
                     dados_para_ia = df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)
-                    
-                    prompt = f"""
-                    Você é um Analista Logístico Sénior de um armazém de e-commerce.
-                    Analise os dados da tabela abaixo. 
-                    - A coluna 'consumo_mensal' representa o consumo real dos últimos 30 dias.
-                    - A coluna 'lead_time' é o tempo de entrega do fornecedor EM DIAS.
-                    
-                    Com base no cruzamento matemático do saldo atual, consumo mensal e lead time, entregue:
-                    1) Um breve resumo da saúde do inventário.
-                    2) Alertas críticos de risco de ruptura (informando se o estoque acaba antes do fornecedor entregar).
-                    3) Sugestões precisas de ressuprimento.
-                    
-                    Dados:
-                    {dados_para_ia}
-                    """
-                    
+                    prompt = f"Analise o estoque logístico (lead_time em DIAS, consumo_mensal real):\n{dados_para_ia}\nEntregue: Resumo de saúde, riscos de ruptura antes do lead time e sugestão de compras."
                     st.write(mod.generate_content(prompt).text)
-                except Exception as e: 
-                    st.error(f"Erro na conexão com IA: {e}")
+                except Exception as e: st.error(f"Erro IA: {e}")
 
-# HISTÓRICO
+# ─────────────────────────────────────────────────────────────
+# OPTIMIZAÇÃO 3: FILTRO DE CARGA NO HISTÓRICO (PAGINAÇÃO MENSAL)
+# ─────────────────────────────────────────────────────────────
 with aba_historico:
+    st.subheader("📜 Histórico de Movimentações")
     mv = listar_movimentacoes()
-    st.dataframe(mv, use_container_width=True, hide_index=True)
-    st.download_button("Baixar Dados (CSV)", mv.to_csv(index=False).encode('utf-8-sig'), "historico.csv")
+    if not mv.empty:
+        # Extrai com segurança o formato MM/AAAA da string 'DD/MM/AAAA HH:MM'
+        mv['Mês/Ano'] = mv['data_hora'].apply(lambda x: x.split()[0][3:])
+        meses_disponiveis = sorted(mv['Mês/Ano'].unique(), reverse=True)
+        
+        c_filt, _ = st.columns([2, 6])
+        with c_filt:
+            mes_selecionado = st.selectbox("Filtrar Histórico por Período:", meses_disponiveis)
+        
+        # Filtra a visualização para economizar memória do ecrã
+        mv_filtrado = mv[mv['Mês/Ano'] == mes_selecionado].drop(columns=['Mês/Ano'])
+        
+        st.dataframe(mv_filtrado, use_container_width=True, hide_index=True)
+        st.download_button("📥 Baixar Dados do Mês (CSV)", mv_filtrado.to_csv(index=False).encode('utf-8-sig'), f"historico_{mes_selecionado.replace('/', '_')}.csv")
+    else:
+        st.info("Nenhuma movimentação registrada.")
 
-# GESTÃO DE PRODUTOS (CADASTRAR / EDITAR / EXCLUIR COM DUAS ETAPAS)
+# GESTÃO DE PRODUTOS (CADASTRAR / EDITAR / EXCLUIR SEGURA EM 2 ETAPAS)
 with aba_gestao:
     a1, a2, a3 = st.tabs(["➕ Novo", "✏️ Editar", "🗑️ Excluir"])
     
@@ -354,9 +362,10 @@ with aba_gestao:
             l = st.number_input("Lead Time (Dias)", value=3)
             v = st.number_input("Valor Un.", value=0.0)
             if st.form_submit_button("Cadastrar"):
-                cadastrar_produto(n, m, v, c, l)
-                sincronizar_tudo()
-                st.rerun()
+                if n.strip():
+                    cadastrar_produto(n.strip(), m, v, c, l)
+                    disparar_sincronizacao()
+                    st.rerun()
                 
     with a2:
         df = listar_produtos()
@@ -373,7 +382,7 @@ with aba_gestao:
                 ev = st.number_input("Valor Un.", value=float(p_at["valor_unitario"]))
                 if st.form_submit_button("Atualizar"):
                     editar_produto(id_e, en, em, ev, ec, el)
-                    sincronizar_tudo()
+                    disparar_sincronizacao()
                     st.rerun()
                     
     with a3:
@@ -384,7 +393,6 @@ with aba_gestao:
             s_d = st.selectbox("Selecione o Insumo para Excluir", list(op_d.keys()), key="del_select")
             id_d = op_d[s_d]
             
-            # Caixa de Alerta Visual
             st.warning(f"⚠️ **Aviso de Integridade:** Eliminar o item '{s_d}' irá apagar permanentemente o seu registo do cadastro e **destruirá todo o histórico de movimentações** associado. Esta ação não pode ser desfeita.")
             
             # ETAPA 1: Confirmação lógica via Checkbox
@@ -392,9 +400,8 @@ with aba_gestao:
             
             # ETAPA 2: Botão perigoso destrancado apenas se o Checkbox for marcado
             if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar_exclusao, key="del_btn"):
-                with st.spinner("Removendo dados e atualizando espelhos Cloud..."):
-                    deletar_produto(id_d)
-                    sincronizar_tudo()
+                deletar_produto(id_d)
+                disparar_sincronizacao()
                 st.toast(f"'{s_d}' foi removido do sistema.", icon="🗑️")
                 st.rerun()
         else:
