@@ -136,6 +136,11 @@ def editar_produto(id_p, nome, min_e, valor, cat, lead):
     with get_conn() as conn:
         conn.execute("UPDATE produtos SET nome=?, estoque_minimo=?, valor_unitario=?, categoria=?, lead_time=? WHERE id=?", (nome, min_e, valor, cat, lead, id_p))
 
+def deletar_produto(id_produto):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM movimentacoes WHERE id_produto = ?", (id_produto,))
+        conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
+
 # ─────────────────────────────────────────────────────────────
 # INICIALIZAÇÃO
 # ─────────────────────────────────────────────────────────────
@@ -160,8 +165,7 @@ with aba_painel:
     if not df.empty:
         df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
         
-        # --- LÓGICA DE INTELIGÊNCIA LOGÍSTICA AJUSTADA ---
-        # Captura consumo de Saídas E divergências negativas de Contagem (reduções de estoque)
+        # --- LÓGICA DE INTELIGÊNCIA LOGÍSTICA BASEADA EM INVENTÁRIO ---
         with get_conn() as conn:
             cons = pd.read_sql("""
                 SELECT id_produto, SUM(ABS(quantidade)) as total 
@@ -173,7 +177,7 @@ with aba_painel:
         df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
         df['consumo_diario'] = df['total'] / 30
         
-        # Cálculo Seguro de Cobertura (Evita divisão por zero)
+        # Cálculo Seguro de Cobertura
         mask = df['consumo_diario'] > 0
         df['Runway'] = 999
         df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
@@ -186,7 +190,7 @@ with aba_painel:
         df['Status'] = df.apply(set_status, axis=1)
         df['Runway'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-        # Layout Adaptável (Computador, Celular e Tablet)
+        # Layout Adaptável
         c1, c2, c3, c4 = st.columns([1,1,1,1])
         c1.markdown(f'<div class="metric-card">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-card">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
@@ -239,10 +243,10 @@ with aba_operacao:
                     sincronizar_tudo()
                     st.rerun()
 
-# ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM (FOCADO E ISOLADO)
+# ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM
 with aba_contagem:
     st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Utilize esta aba para realizar a contagem física semanal. O sistema gerará as taxas de consumo com base nas reduções apuradas aqui.")
+    st.info("Utilize esta aba para realizar a contagem física semanal. O sistema gerará as taxas de consumo com base nas diferenças apuradas aqui.")
     df = listar_produtos()
     if not df.empty:
         with st.container(border=True):
@@ -289,9 +293,10 @@ with aba_historico:
     st.dataframe(mv, use_container_width=True, hide_index=True)
     st.download_button("Baixar Dados (CSV)", mv.to_csv(index=False).encode('utf-8-sig'), "historico.csv")
 
-# GESTÃO DE PRODUTOS
+# GESTÃO DE PRODUTOS (CADASTRAR / EDITAR / EXCLUIR COM DUAS ETAPAS)
 with aba_gestao:
-    a1, a2 = st.tabs(["➕ Novo", "✏️ Editar"])
+    a1, a2, a3 = st.tabs(["➕ Novo", "✏️ Editar", "🗑️ Excluir"])
+    
     with a1:
         with st.form("new_p"):
             n = st.text_input("Nome do Insumo")
@@ -303,6 +308,7 @@ with aba_gestao:
                 cadastrar_produto(n, m, v, c, l)
                 sincronizar_tudo()
                 st.rerun()
+                
     with a2:
         df = listar_produtos()
         if not df.empty:
@@ -320,3 +326,27 @@ with aba_gestao:
                     editar_produto(id_e, en, em, ev, ec, el)
                     sincronizar_tudo()
                     st.rerun()
+                    
+    with a3:
+        st.subheader("🗑️ Eliminar Insumo da Base")
+        df = listar_produtos()
+        if not df.empty:
+            op_d = dict(zip(df["nome"], df["id"]))
+            s_d = st.selectbox("Selecione o Insumo para Excluir", list(op_d.keys()), key="del_select")
+            id_d = op_d[s_d]
+            
+            # Caixa de Alerta Visual
+            st.warning(f"⚠️ **Aviso de Integridade:** Eliminar o item '{s_d}' irá apagar permanentemente o seu registo do cadastro e **destruirá todo o histórico de movimentações** associado. Esta ação não pode ser desfeita.")
+            
+            # ETAPA 1: Confirmação lógica via Checkbox
+            confirmar_exclusao = st.checkbox("Confirmo que verifiquei os dados e pretendo apagar este insumo e o seu histórico definitivamente.", key="del_check")
+            
+            # ETAPA 2: Botão perigoso destrancado apenas se o Checkbox for marcado
+            if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar_exclusao, key="del_btn"):
+                with st.spinner("Removendo dados e atualizando espelhos Cloud..."):
+                    deletar_produto(id_d)
+                    sincronizar_tudo()
+                st.toast(f"'{s_d}' foi removido do sistema.", icon="🗑️")
+                st.rerun()
+        else:
+            st.info("Nenhum produto cadastrado para exclusão.")
