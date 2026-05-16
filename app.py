@@ -1,4 +1,3 @@
-import google.generativeai as genai
 import streamlit as st
 import sqlite3
 from datetime import datetime
@@ -6,6 +5,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from io import BytesIO
 import os
+import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
@@ -76,7 +76,6 @@ def sincronizar_csv_drive(df, nome_arquivo):
         resultados = servico.files().list(q=query, fields="files(id)").execute()
         ficheiros = resultados.get('files', [])
 
-        # Converte para CSV com padrão utf-8-sig para garantir a leitura perfeita de acentos
         csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
         media = MediaIoBaseUpload(BytesIO(csv_bytes), mimetype='text/csv', resumable=True)
         metadados = {'name': nome_arquivo, 'parents': [FOLDER_ID]}
@@ -215,12 +214,13 @@ st.divider()
 aba_ia, aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
     "🧠 Assistente IA", "📊 Painel", "⬇️ Entrada", "⬆️ Saída", "🔧 Ajuste", "📋 Contagem", "📜 Histórico", "➕ Produtos"
 ])
+
 # ═════════════════════════════════════════════════════════════
 # ASSISTENTE IA (GEMINI)
 # ═════════════════════════════════════════════════════════════
 with aba_ia:
     st.subheader("🤖 Analista Logístico Virtual")
-    st.markdown("Use a Inteligência Artificial para analisar seu estoque atual e obter recomendações.")
+    st.markdown("Use a Inteligência Artificial para analisar o seu estoque atual e obter recomendações.")
     
     if st.button("✨ Gerar Análise de Estoque", type="primary"):
         produtos_df = listar_produtos()
@@ -228,10 +228,14 @@ with aba_ia:
         if produtos_df.empty:
             st.warning("Cadastre produtos para a IA analisar.")
         else:
-            with st.spinner("A IA está analisando seus dados de estoque..."):
+            with st.spinner("A IA está a analisar os seus dados de estoque..."):
                 try:
                     # Configura a API com o seu segredo
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    
+                    # --- BUSCA DINÂMICA E INTELIGENTE DO MODELO ---
+                    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                    modelo_escolhido = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
                     
                     # Prepara a tabela de dados para a IA ler
                     dados_texto = produtos_df[["nome", "saldo_atual", "estoque_minimo"]].to_string(index=False)
@@ -252,11 +256,11 @@ with aba_ia:
                     Responda de forma direta, profissional e use bullet points para facilitar a leitura.
                     """
                     
-                    # Chama o modelo do Gemini
-                    modelo = genai.GenerativeModel('gemini-pro')
+                    # Chama a IA usando o modelo autorizado
+                    modelo = genai.GenerativeModel(modelo_escolhido)
                     resposta = modelo.generate_content(prompt)
                     
-                    st.success("Análise concluída!")
+                    st.success(f"Análise concluída com o modelo: {modelo_escolhido}")
                     st.markdown("### 📊 Insights do Assistente:")
                     st.write(resposta.text)
                     
@@ -311,7 +315,6 @@ with aba_painel:
 
         with col1:
             st.markdown("### 📦 Posição de Estoque")
-            # Adicionada a coluna Classe na visualização
             st.dataframe(
                 produtos_df[["Curva ABC", "nome", "saldo_atual", "estoque_minimo", "valor_unitario", "valor_total"]].rename(columns={
                     "Curva ABC": "Classe", "nome": "Produto", "saldo_atual": "Saldo", "estoque_minimo": "Mínimo", 
