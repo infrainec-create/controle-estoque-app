@@ -4,9 +4,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 from io import BytesIO
+import os
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 # ─────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DA PÁGINA E CONSTANTES
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Controle de Estoque",
@@ -15,6 +19,57 @@ st.set_page_config(
 )
 
 DB_PATH = "estoque.db"
+FOLDER_ID = st.secrets["FOLDER_ID"]
+
+# ─────────────────────────────────────────────────────────────
+# CONEXÃO E SINCRONIZAÇÃO COM GOOGLE DRIVE
+# ─────────────────────────────────────────────────────────────
+def obter_servico_drive():
+    info_chaves = dict(st.secrets["gcp_service_account"])
+    credenciais = service_account.Credentials.from_service_account_info(info_chaves)
+    return build('drive', 'v3', credentials=credenciais)
+
+def descarregar_do_drive():
+    """Procura o ficheiro estoque.db no Drive e descarrega localmente se existir."""
+    try:
+        servico = obter_servico_drive()
+        query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
+        resultados = servico.files().list(q=query, fields="files(id)").execute()
+        ficheiros = resultados.get('files', [])
+        
+        if ficheiros:
+            id_ficheiro = ficheiros[0]['id']
+            requisicao = servico.files().get_media(fileId=id_ficheiro)
+            with open(DB_PATH, "wb") as f:
+                carregador = MediaIoBaseDownload(f, requisicao)
+                concluido = False
+                while not concluido:
+                    _, concluido = carregador.next_chunk()
+            return True
+    except Exception as e:
+        st.error(f"Erro ao descarregar do Google Drive: {e}")
+    return False
+
+def enviar_para_o_drive():
+    """Envia ou atualiza o ficheiro estoque.db no Google Drive."""
+    try:
+        servico = obter_servico_drive()
+        query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
+        resultados = servico.files().list(q=query, fields="files(id)").execute()
+        ficheiros = resultados.get('files', [])
+        
+        metadados = {'name': DB_PATH, 'parents': [FOLDER_ID]}
+        media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+        
+        if ficheiros:
+            # Atualiza o ficheiro existente
+            id_ficheiro = ficheiros[0]['id']
+            servico.files().update(fileId=id_ficheiro, media_body=media).execute()
+        else:
+            # Cria um novo ficheiro
+            servico.files().create(body=metadados, media_body=media).execute()
+    except Exception as e:
+        st.error(f"Erro ao enviar para o Google Drive: {e}")
 
 # ─────────────────────────────────────────────────────────────
 # FUNÇÕES DE EXPORTAÇÃO
@@ -76,14 +131,8 @@ def listar_produtos():
 def listar_movimentacoes():
     with get_conn() as conn:
         return pd.read_sql("""
-            SELECT
-                m.id,
-                p.nome AS produto,
-                m.data_hora,
-                m.tipo,
-                m.quantidade,
-                m.saldo_resultante,
-                m.observacao
+            SELECT m.id, p.nome AS produto, m.data_hora, m.tipo, 
+                   m.quantidade, m.saldo_resultante, m.observacao
             FROM movimentacoes m
             JOIN produtos p ON p.id = m.id_produto
             ORDER BY m.id DESC
@@ -116,15 +165,21 @@ def deletar_produto(id_produto):
         conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO
+# INICIALIZAÇÃO CONTROLADA COM FLUXO DE NUVEM
 # ─────────────────────────────────────────────────────────────
-init_db()
+if "db_sincronizado" not  in st.session_state:
+    # Tenta descarregar o backup do Drive. Se não existir, cria um novo local
+    existe_no_drive = descarregar_do_drive()
+    init_db()
+    if not existe_no_drive:
+        enviar_para_o_drive()
+    st.session_state["db_sincronizado"] = True
 
 # ─────────────────────────────────────────────────────────────
 # INTERFACE PRINCIPAL
 # ─────────────────────────────────────────────────────────────
 st.title("📦 Controle de Estoque")
-st.caption("Controle de insumos de limpeza e operações")
+st.caption("Controle de insumos de limpeza e operações com sincronização em nuvem")
 st.divider()
 
 aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
@@ -155,7 +210,6 @@ with aba_painel:
         c5.metric("Valor estoque", f"R$ {valor_total_estoque:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
         st.divider()
-
         col1, col2 = st.columns(2, gap="large")
 
         with col1:
@@ -195,13 +249,11 @@ with aba_painel:
                 texto_pedido = "🛒 *Pedido de Insumos de Limpeza*\n\n"
                 for index, row in df_pedido.iterrows():
                     texto_pedido += f"• {row['Produto']}: {int(row['Sugestão Compra'])} un\n"
-                
                 st.text_area("📝 Copiar pedido para WhatsApp/E-mail:", value=texto_pedido, height=120)
             else:
                 st.success("✅ Estoque abastecido! Não há necessidade de compras no momento.")
 
         st.divider()
-        
         col_graf1, col_graf2 = st.columns(2, gap="large")
         
         with col_graf1:
@@ -237,7 +289,7 @@ with aba_entrada:
     st.subheader("Registrar Entrada")
     produtos_df = listar_produtos()
     if produtos_df.empty:
-        st.warning("⚠️ Nenhum produto cadastrado. Vá até a aba 'Produtos' primeiro.")
+        st.warning("⚠️ Nenhum produto cadastrado.")
     else:
         opcoes = dict(zip(produtos_df["nome"], produtos_df["id"]))
         nome_sel = st.selectbox("Produto", list(opcoes.keys()), key="ent_prod")
@@ -257,7 +309,8 @@ with aba_entrada:
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Entrada", int(qty), novo_saldo, obs)
-            st.success("Entrada registrada com sucesso!")
+            enviar_para_o_drive()
+            st.success("Entrada registrada e sincronizada com o Drive!")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -285,7 +338,8 @@ with aba_saida:
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Saída", -int(qty), novo_saldo, obs)
-            st.success("Saída registrada com sucesso!")
+            enviar_para_o_drive()
+            st.success("Saída registrada e sincronizada com o Drive!")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -313,7 +367,8 @@ with aba_ajuste:
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, int(novo_saldo))
                 registrar_movimentacao(conn, id_sel, "Ajuste", diferenca, int(novo_saldo), obs)
-            st.success("Ajuste realizado com sucesso!")
+            enviar_para_o_drive()
+            st.success("Ajuste realizado e sincronizado!")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -344,7 +399,8 @@ with aba_contagem:
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, estoque_fisico)
                 registrar_movimentacao(conn, id_sel, "Contagem", -consumo, estoque_fisico, "Contagem semanal")
-            st.success("Contagem registrada!")
+            enviar_para_o_drive()
+            st.success("Contagem registada e base sincronizada!")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -401,7 +457,8 @@ with aba_cadastro:
             else:
                 ok, msg = cadastrar_produto(nome_novo.strip(), estoque_minimo, valor_unitario)
                 if ok:
-                    st.success(msg)
+                    enviar_para_o_drive()
+                    st.success(msg + " Sincronizado com o Drive!")
                     st.rerun()
                 else:
                     st.error(msg)
@@ -415,7 +472,8 @@ with aba_cadastro:
             st.warning("Ao excluir um produto, todo o histórico de movimentação dele será apagado.")
             if st.button("🗑️ Confirmar Exclusão"):
                 deletar_produto(opcoes_del[nome_del])
-                st.success("Produto excluído com sucesso!")
+                enviar_para_o_drive()
+                st.success("Produto excluído e base sincronizada!")
                 st.rerun()
         else:
             st.info("Nenhum produto cadastrado.")
