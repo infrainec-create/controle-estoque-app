@@ -69,7 +69,6 @@ def enviar_para_o_drive():
         st.error(f"Erro ao enviar banco para o Drive: {e}")
 
 def sincronizar_csv_drive(df, nome_arquivo):
-    """Exporta um DataFrame como CSV para o Drive (Ponte para o Looker Studio/BI)."""
     try:
         servico = obter_servico_drive()
         query = f"name='{nome_arquivo}' and '{FOLDER_ID}' in parents and trashed=false"
@@ -88,7 +87,6 @@ def sincronizar_csv_drive(df, nome_arquivo):
         st.error(f"Erro ao sincronizar CSV {nome_arquivo}: {e}")
 
 def sincronizar_tudo():
-    """Roda a sincronização do banco SQLite e a exportação dos CSVs de uma só vez."""
     enviar_para_o_drive()
     sincronizar_csv_drive(listar_produtos(), "produtos_looker.csv")
     sincronizar_csv_drive(listar_movimentacoes(), "movimentacoes_looker.csv")
@@ -107,7 +105,7 @@ def converter_para_excel(df):
     return output.getvalue()
 
 # ─────────────────────────────────────────────────────────────
-# BANCO DE DADOS E LÓGICA
+# BANCO DE DADOS E LÓGICA (COM MIGRAÇÃO DE CATEGORIA)
 # ─────────────────────────────────────────────────────────────
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -120,7 +118,8 @@ def init_db():
                 nome TEXT NOT NULL UNIQUE,
                 saldo_atual INTEGER NOT NULL DEFAULT 0,
                 estoque_minimo INTEGER DEFAULT 10,
-                valor_unitario REAL DEFAULT 0
+                valor_unitario REAL DEFAULT 0,
+                categoria TEXT DEFAULT 'Geral'
             );
 
             CREATE TABLE IF NOT EXISTS movimentacoes (
@@ -134,16 +133,23 @@ def init_db():
                 observacao TEXT
             );
         """)
+        
+        # Rotina de migração segura: Adiciona a coluna categoria se ela não existir no BD antigo
+        cursor = conn.execute("PRAGMA table_info(produtos)")
+        colunas = [col[1] for col in cursor.fetchall()]
+        if 'categoria' not in colunas:
+            conn.execute("ALTER TABLE produtos ADD COLUMN categoria TEXT DEFAULT 'Geral'")
+
         cursor = conn.execute("SELECT COUNT(*) FROM produtos")
         if cursor.fetchone()[0] == 0:
             conn.executemany("""
-                INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario, categoria)
+                VALUES (?, ?, ?, ?, ?)
             """, [
-                ("Papel higiênico", 120, 50, 1.80),
-                ("Sabonete líquido", 30, 10, 12.50),
-                ("Desinfetante", 20, 10, 8.90),
-                ("Saco de lixo", 80, 30, 0.90),
+                ("Papel higiênico", 120, 50, 1.80, "Limpeza"),
+                ("Sabonete líquido", 30, 10, 12.50, "Limpeza"),
+                ("Açúcar", 1, 10, 4.50, "Copa"),
+                ("Saco de lixo", 18, 30, 0.90, "Limpeza"),
             ])
 
 def listar_produtos():
@@ -170,13 +176,13 @@ def registrar_movimentacao(conn, id_produto, tipo, quantidade, saldo_resultante,
         VALUES (?, ?, ?, ?, ?, ?)
     """, (id_produto, data_hora, tipo, quantidade, saldo_resultante, obs))
 
-def cadastrar_produto(nome, estoque_minimo, valor_unitario):
+def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria):
     try:
         with get_conn() as conn:
             conn.execute("""
-                INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario)
-                VALUES (?, 0, ?, ?)
-            """, (nome, estoque_minimo, valor_unitario))
+                INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario, categoria)
+                VALUES (?, 0, ?, ?, ?)
+            """, (nome, estoque_minimo, valor_unitario, categoria))
         return True, "Produto cadastrado com sucesso."
     except sqlite3.IntegrityError:
         return False, "Produto já existe."
@@ -230,37 +236,33 @@ with aba_ia:
         else:
             with st.spinner("A IA está a analisar os seus dados de estoque..."):
                 try:
-                    # Configura a API com o seu segredo
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     
-                    # --- BUSCA DINÂMICA E INTELIGENTE DO MODELO ---
                     modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                     modelo_escolhido = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
                     
-                    # Prepara a tabela de dados para a IA ler
-                    dados_texto = produtos_df[["nome", "saldo_atual", "estoque_minimo"]].to_string(index=False)
+                    # Incluindo a categoria para a IA ter contexto
+                    dados_texto = produtos_df[["categoria", "nome", "saldo_atual", "estoque_minimo"]].to_string(index=False)
                     
-                    # Cria o Prompt (O comando para a IA)
                     prompt = f"""
-                    Você é um especialista em logística e gestão de estoque de insumos de limpeza.
-                    Analise os dados atuais do meu estoque abaixo. As colunas são Nome do Produto, Saldo Atual e Estoque Mínimo.
+                    Você é um especialista em logística e gestão de estoque de insumos corporativos.
+                    Analise os dados atuais do meu estoque abaixo. As colunas são Categoria, Nome do Produto, Saldo Atual e Estoque Mínimo.
                     
                     Dados do Estoque:
                     {dados_texto}
                     
                     Com base nisso, me dê:
                     1. Um resumo da situação geral.
-                    2. Alertas de produtos que estão críticos (abaixo do mínimo) ou quase lá.
-                    3. Uma recomendação estratégica de reposição.
+                    2. Alertas de produtos críticos (abaixo do mínimo).
+                    3. Uma recomendação de compras separada por setor/categoria.
                     
-                    Responda de forma direta, profissional e use bullet points para facilitar a leitura.
+                    Responda de forma direta, profissional e use bullet points.
                     """
                     
-                    # Chama a IA usando o modelo autorizado
                     modelo = genai.GenerativeModel(modelo_escolhido)
                     resposta = modelo.generate_content(prompt)
                     
-                    st.success(f"Análise concluída com o modelo: {modelo_escolhido}")
+                    st.success(f"Análise concluída com sucesso!")
                     st.markdown("### 📊 Insights do Assistente:")
                     st.write(resposta.text)
                     
@@ -294,20 +296,27 @@ with aba_painel:
             produtos_df = produtos_df.merge(df_abc[["id", "Curva ABC"]], on="id", how="left").fillna({"Curva ABC": "-"})
         else:
             produtos_df["Curva ABC"] = "-"
-        # ----------------------------
+
+        # --- SEMÁFORO VISUAL ---
+        def definir_status(row):
+            if row['saldo_atual'] <= 0: return '🔴 Zerado'
+            elif row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
+            elif row['saldo_atual'] <= (row['estoque_minimo'] * 1.3): return '🟡 Atenção'
+            else: return '🟢 Saudável'
+
+        produtos_df['Status'] = produtos_df.apply(definir_status, axis=1)
 
         total_itens = len(produtos_df)
         total_saldo = int(produtos_df["saldo_atual"].sum())
         saldo_baixo = int((produtos_df["saldo_atual"] < produtos_df["estoque_minimo"]).sum())
         valor_total_estoque = produtos_df["valor_total"].sum()
-        total_movs = len(movs_df)
 
         st.markdown("### Visão Geral")
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Produtos", total_itens)
         c2.metric("Total estoque", total_saldo)
-        c3.metric("Estoque crítico", saldo_baixo)
-        c4.metric("Movimentações", total_movs)
+        c3.metric("Itens Críticos", saldo_baixo)
+        c4.metric("Movimentações", len(movs_df))
         c5.metric("Valor estoque", f"R$ {valor_total_estoque:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
         st.divider()
@@ -315,10 +324,10 @@ with aba_painel:
 
         with col1:
             st.markdown("### 📦 Posição de Estoque")
+            # Exibindo o novo dataframe com Status e Categoria
             st.dataframe(
-                produtos_df[["Curva ABC", "nome", "saldo_atual", "estoque_minimo", "valor_unitario", "valor_total"]].rename(columns={
-                    "Curva ABC": "Classe", "nome": "Produto", "saldo_atual": "Saldo", "estoque_minimo": "Mínimo", 
-                    "valor_unitario": "Valor Un.", "valor_total": "Total"
+                produtos_df[["Status", "categoria", "nome", "saldo_atual", "estoque_minimo", "Curva ABC", "valor_total"]].rename(columns={
+                    "categoria": "Setor", "nome": "Produto", "saldo_atual": "Saldo", "estoque_minimo": "Mínimo", "valor_total": "Total R$"
                 }),
                 width="stretch", hide_index=True
             )
@@ -327,7 +336,7 @@ with aba_painel:
             st.markdown("### 🛒 Sugestão de Compras")
             with get_conn() as conn:
                 df_compras = pd.read_sql("""
-                    SELECT p.nome AS Produto, p.saldo_atual AS saldo_atual, p.estoque_minimo,
+                    SELECT p.categoria, p.nome AS Produto, p.saldo_atual AS saldo_atual, p.estoque_minimo,
                            COALESCE(SUM(ABS(m.quantidade)), 0) AS consumo
                     FROM produtos p
                     LEFT JOIN movimentacoes m ON p.id = m.id_produto AND m.tipo = 'Saída'
@@ -338,8 +347,8 @@ with aba_painel:
             df_compras["Sugestão Compra"] = ((df_compras["consumo_medio"] * 4) + df_compras["estoque_minimo"] - df_compras["saldo_atual"]).clip(lower=0)
 
             st.dataframe(
-                df_compras[["Produto", "consumo", "consumo_medio", "estoque_minimo", "saldo_atual", "Sugestão Compra"]].rename(columns={
-                    "saldo_atual": "Saldo", "consumo": "Consumo", "consumo_medio": "Média/Sem", 
+                df_compras[["categoria", "Produto", "consumo", "consumo_medio", "estoque_minimo", "saldo_atual", "Sugestão Compra"]].rename(columns={
+                    "categoria": "Setor", "saldo_atual": "Saldo", "consumo": "Consumo", "consumo_medio": "Média/Sem", 
                     "estoque_minimo": "Mínimo", "Sugestão Compra": "Comprar"
                 }),
                 width="stretch", hide_index=True
@@ -347,10 +356,16 @@ with aba_painel:
 
             df_pedido = df_compras[df_compras["Sugestão Compra"] > 0]
             if not df_pedido.empty:
-                texto_pedido = "🛒 *Pedido de Insumos de Limpeza*\n\n"
-                for index, row in df_pedido.iterrows():
-                    texto_pedido += f"• {row['Produto']}: {int(row['Sugestão Compra'])} un\n"
-                st.text_area("📝 Copiar pedido para WhatsApp/E-mail:", value=texto_pedido, height=120)
+                texto_pedido = "🛒 *Pedido de Reposição Setorial*\n\n"
+                # Agrupando pedido por categoria
+                for cat in df_pedido['categoria'].unique():
+                    texto_pedido += f"*{cat}*\n"
+                    df_cat = df_pedido[df_pedido['categoria'] == cat]
+                    for index, row in df_cat.iterrows():
+                        texto_pedido += f"• {row['Produto']}: {int(row['Sugestão Compra'])} un\n"
+                    texto_pedido += "\n"
+                
+                st.text_area("📝 Copiar pedido agrupado:", value=texto_pedido, height=120)
             else:
                 st.success("✅ Estoque abastecido! Não há necessidade de compras no momento.")
 
@@ -572,6 +587,9 @@ with aba_cadastro:
 
     with col1:
         st.subheader("➕ Novo Produto")
+        
+        # Novo campo de Categoria adicionado
+        categoria_nova = st.selectbox("Categoria/Setor", ["Limpeza", "Copa", "Escritório", "EPI", "Operação", "Outros"])
         nome_novo = st.text_input("Nome do produto")
         estoque_minimo = st.number_input("Estoque mínimo", min_value=0, value=10)
         valor_unitario = st.number_input("Valor unitário (R$)", min_value=0.0, step=0.01, format="%.2f")
@@ -580,7 +598,7 @@ with aba_cadastro:
             if not nome_novo.strip():
                 st.error("Informe um nome para o produto.")
             else:
-                ok, msg = cadastrar_produto(nome_novo.strip(), estoque_minimo, valor_unitario)
+                ok, msg = cadastrar_produto(nome_novo.strip(), estoque_minimo, valor_unitario, categoria_nova)
                 if ok:
                     with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
                         sincronizar_tudo()
