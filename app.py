@@ -89,7 +89,7 @@ def converter_para_excel(df):
     return output.getvalue()
 
 # ─────────────────────────────────────────────────────────────
-# BANCO DE DADOS E LÓGICA (MIGRAÇÃO LEAD TIME)
+# BANCO DE DADOS E LÓGICA
 # ─────────────────────────────────────────────────────────────
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -166,6 +166,18 @@ def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time
     except sqlite3.IntegrityError:
         return False, "Produto já existe."
 
+def editar_produto(id_produto, nome, estoque_minimo, valor_unitario, categoria, lead_time):
+    try:
+        with get_conn() as conn:
+            conn.execute("""
+                UPDATE produtos 
+                SET nome = ?, estoque_minimo = ?, valor_unitario = ?, categoria = ?, lead_time = ?
+                WHERE id = ?
+            """, (nome, estoque_minimo, valor_unitario, categoria, lead_time, id_produto))
+        return True, "Produto atualizado com sucesso."
+    except sqlite3.IntegrityError:
+        return False, "Já existe outro produto com este nome."
+
 def deletar_produto(id_produto):
     with get_conn() as conn:
         conn.execute("DELETE FROM movimentacoes WHERE id_produto = ?", (id_produto,))
@@ -195,7 +207,7 @@ if st.session_state["alerta_ruptura"]:
 st.divider()
 
 aba_ia, aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
-    "🧠 Assistente IA", "📊 Painel", "⬇️ Entrada", "⬆️ Saída", "🔧 Ajuste", "📋 Contagem", "📜 Histórico", "➕ Produtos"
+    "🧠 Assistente IA", "📊 Painel", "⬇️ Entrada", "⬆️ Saída", "🔧 Ajuste", "📋 Contagem", "📜 Histórico", "⚙️ Produtos"
 ])
 
 # IA
@@ -261,10 +273,8 @@ with aba_painel:
                     FROM produtos p LEFT JOIN movimentacoes m ON p.id = m.id_produto AND m.tipo = 'Saída' GROUP BY p.id
                 """, conn)
 
-            # Lógica WMS: Mínimo ideal = Consumo diário (consumo/30) * lead_time + 20% margem
             df_compra["consumo_diario"] = df_compra["consumo_total"] / 30
             df_compra["Minimo Ideal"] = (df_compra["consumo_diario"] * df_compra["lead_time"] * 1.2).astype(int)
-            # A sugestão de compra foca em cobrir o mínimo cadastrado OU o mínimo calculado pelo WMS
             df_compra["Alvo"] = df_compra[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
             df_compra["Sugestão Compra"] = (df_compra["Alvo"] - df_compra["saldo_atual"]).clip(lower=0)
 
@@ -306,7 +316,7 @@ with aba_saida:
             with st.spinner("Sincronizando..."): sincronizar_tudo()
             st.rerun()
 
-# AJUSTE & CONTAGEM OMITIDOS NO RESUMO, MAS INCLUÍDOS NA LÓGICA (Simplificado para o script)
+# AJUSTE
 with aba_ajuste:
     if not produtos_df.empty:
         opcoes = dict(zip(produtos_df["nome"], produtos_df["id"]))
@@ -322,6 +332,7 @@ with aba_ajuste:
             with st.spinner("Sincronizando..."): sincronizar_tudo()
             st.rerun()
 
+# CONTAGEM
 with aba_contagem:
     if not produtos_df.empty:
         opcoes = dict(zip(produtos_df["nome"], produtos_df["id"]))
@@ -343,28 +354,59 @@ with aba_historico:
         st.dataframe(movs_df, hide_index=True)
         st.download_button("📥 CSV", converter_para_csv(movs_df), "movs.csv", "text/csv")
 
-# CADASTRO
+# GESTÃO DE PRODUTOS (CADASTRAR / EDITAR / EXCLUIR)
 with aba_cadastro:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("➕ Novo")
-        cat = st.selectbox("Categoria", ["Limpeza", "Copa", "Escritório", "EPI"])
+    aba_novo, aba_editar, aba_excluir = st.tabs(["➕ Novo Produto", "✏️ Editar Produto", "🗑️ Excluir Produto"])
+    
+    with aba_novo:
+        cat = st.selectbox("Categoria", ["Limpeza", "Copa", "Escritório", "EPI", "Geral"])
         nome = st.text_input("Nome")
         minimo = st.number_input("Mínimo", min_value=0, value=10)
         lead = st.number_input("Lead Time (dias)", min_value=1, value=3)
         valor = st.number_input("Valor Un.", min_value=0.0, format="%.2f")
-        if st.button("✅ Salvar"):
+        if st.button("✅ Cadastrar Produto"):
             if nome.strip():
                 ok, msg = cadastrar_produto(nome.strip(), minimo, valor, cat, lead)
                 if ok:
                     with st.spinner("Sincronizando..."): sincronizar_tudo()
                     st.rerun()
                 else: st.error(msg)
-    with c2:
-        st.subheader("🗑️ Excluir")
+    
+    with aba_editar:
+        produtos_df = listar_produtos()
+        if not produtos_df.empty:
+            opcoes_edit = dict(zip(produtos_df["nome"], produtos_df["id"]))
+            nome_edit = st.selectbox("Selecione o produto", list(opcoes_edit.keys()), key="sel_edit")
+            id_edit = opcoes_edit[nome_edit]
+            
+            # Puxa os dados atuais do produto selecionado
+            prod_atual = produtos_df[produtos_df["id"] == id_edit].iloc[0]
+            
+            lista_cats = ["Geral", "Limpeza", "Copa", "Escritório", "EPI", "Operação", "Outros"]
+            if prod_atual["categoria"] not in lista_cats:
+                lista_cats.append(prod_atual["categoria"])
+                
+            nova_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(prod_atual["categoria"]), key="ed_cat")
+            novo_nome = st.text_input("Nome", value=prod_atual["nome"], key="ed_nome")
+            novo_min = st.number_input("Mínimo", min_value=0, value=int(prod_atual["estoque_minimo"]), key="ed_min")
+            novo_lead = st.number_input("Lead Time (dias)", min_value=1, value=int(prod_atual["lead_time"]), key="ed_lead")
+            novo_val = st.number_input("Valor Un.", min_value=0.0, value=float(prod_atual["valor_unitario"]), format="%.2f", key="ed_val")
+            
+            if st.button("✏️ Salvar Alterações", type="primary"):
+                if novo_nome.strip():
+                    ok, msg = editar_produto(id_edit, novo_nome.strip(), novo_min, novo_val, nova_cat, novo_lead)
+                    if ok:
+                        with st.spinner("Sincronizando..."): sincronizar_tudo()
+                        st.rerun()
+                    else: st.error(msg)
+        else:
+            st.info("Nenhum produto cadastrado.")
+
+    with aba_excluir:
         if not produtos_df.empty:
             del_nome = st.selectbox("Produto a excluir", list(dict(zip(produtos_df["nome"], produtos_df["id"])).keys()))
-            if st.button("🗑️ Confirmar"):
+            st.warning("Todo o histórico deste produto será apagado.")
+            if st.button("🗑️ Confirmar Exclusão"):
                 deletar_produto(dict(zip(produtos_df["nome"], produtos_df["id"]))[del_nome])
                 with st.spinner("Sincronizando..."): sincronizar_tudo()
                 st.rerun()
