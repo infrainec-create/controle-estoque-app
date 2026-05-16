@@ -93,7 +93,6 @@ def atualizar_saldo(conn, id_produto, novo_saldo):
     conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (novo_saldo, id_produto))
 
 def registrar_movimentacao(conn, id_produto, tipo, quantidade, saldo_resultante, obs):
-    # Fuso horário blindado para o Nordeste do Brasil
     data_hora = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
     conn.execute("""
         INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao)
@@ -191,7 +190,6 @@ with aba_painel:
                 width="stretch", hide_index=True
             )
 
-            # ATUALIZAÇÃO 2: Gerador do Pedido de Compra
             df_pedido = df_compras[df_compras["Sugestão Compra"] > 0]
             if not df_pedido.empty:
                 texto_pedido = "🛒 *Pedido de Insumos de Limpeza*\n\n"
@@ -204,7 +202,6 @@ with aba_painel:
 
         st.divider()
         
-        # ATUALIZAÇÃO 3: Gráficos de Consumo Lado a Lado
         col_graf1, col_graf2 = st.columns(2, gap="large")
         
         with col_graf1:
@@ -212,15 +209,9 @@ with aba_painel:
             if not movs_df.empty:
                 df_saidas = movs_df[movs_df["tipo"] == "Saída"].copy()
                 if not df_saidas.empty:
-                    # Converte as datas para o Pandas entender a ordem do tempo
                     df_saidas["Data"] = pd.to_datetime(df_saidas["data_hora"], format="%d/%m/%Y %H:%M").dt.date
-                    
-                    # Agrupa as quantidades que saíram por dia e por produto
                     consumo_tempo = df_saidas.groupby(["Data", "produto"])["quantidade"].sum().abs().reset_index()
-                    
-                    # Organiza a tabela para o gráfico de linha do Streamlit
                     consumo_pivot = consumo_tempo.pivot(index="Data", columns="produto", values="quantidade").fillna(0)
-                    
                     st.line_chart(consumo_pivot)
                 else:
                     st.info("Registre saídas para visualizar o gráfico ao longo do tempo.")
@@ -238,9 +229,12 @@ with aba_painel:
                     st.info("Registre saídas para gerar o gráfico de barras.")
     else:
         st.info("Cadastre produtos para visualizar o painel.")
+
 # ═════════════════════════════════════════════════════════════
 # ENTRADA
-# ══════════════════════════════════════
+# ═════════════════════════════════════════════════════════════
+with aba_entrada:
+    st.subheader("Registrar Entrada")
     produtos_df = listar_produtos()
     if produtos_df.empty:
         st.warning("⚠️ Nenhum produto cadastrado. Vá até a aba 'Produtos' primeiro.")
