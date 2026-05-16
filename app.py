@@ -7,7 +7,7 @@ from io import BytesIO
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CONSTANTES
@@ -30,7 +30,6 @@ def obter_servico_drive():
     return build('drive', 'v3', credentials=credenciais)
 
 def descarregar_do_drive():
-    """Procura o ficheiro estoque.db no Drive e descarrega localmente se existir."""
     try:
         servico = obter_servico_drive()
         query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
@@ -51,7 +50,6 @@ def descarregar_do_drive():
     return False
 
 def enviar_para_o_drive():
-    """Envia ou atualiza o ficheiro estoque.db no Google Drive."""
     try:
         servico = obter_servico_drive()
         query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
@@ -67,10 +65,36 @@ def enviar_para_o_drive():
         else:
             servico.files().create(body=metadados, media_body=media).execute()
     except Exception as e:
-        st.error(f"Erro ao enviar para o Google Drive: {e}")
+        st.error(f"Erro ao enviar banco para o Drive: {e}")
+
+def sincronizar_csv_drive(df, nome_arquivo):
+    """Exporta um DataFrame como CSV para o Drive (Ponte para o Looker Studio/BI)."""
+    try:
+        servico = obter_servico_drive()
+        query = f"name='{nome_arquivo}' and '{FOLDER_ID}' in parents and trashed=false"
+        resultados = servico.files().list(q=query, fields="files(id)").execute()
+        ficheiros = resultados.get('files', [])
+
+        # Converte para CSV com padrão utf-8-sig para garantir a leitura perfeita de acentos
+        csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
+        media = MediaIoBaseUpload(BytesIO(csv_bytes), mimetype='text/csv', resumable=True)
+        metadados = {'name': nome_arquivo, 'parents': [FOLDER_ID]}
+
+        if ficheiros:
+            servico.files().update(fileId=ficheiros[0]['id'], media_body=media).execute()
+        else:
+            servico.files().create(body=metadados, media_body=media).execute()
+    except Exception as e:
+        st.error(f"Erro ao sincronizar CSV {nome_arquivo}: {e}")
+
+def sincronizar_tudo():
+    """Roda a sincronização do banco SQLite e a exportação dos CSVs de uma só vez."""
+    enviar_para_o_drive()
+    sincronizar_csv_drive(listar_produtos(), "produtos_looker.csv")
+    sincronizar_csv_drive(listar_movimentacoes(), "movimentacoes_looker.csv")
 
 # ─────────────────────────────────────────────────────────────
-# FUNÇÕES DE EXPORTAÇÃO
+# FUNÇÕES DE EXPORTAÇÃO LOCAIS
 # ─────────────────────────────────────────────────────────────
 @st.cache_data
 def converter_para_csv(df):
@@ -169,22 +193,20 @@ if "db_sincronizado" not in st.session_state:
     existe_no_drive = descarregar_do_drive()
     init_db()
     if not existe_no_drive:
-        enviar_para_o_drive()
+        sincronizar_tudo()
     st.session_state["db_sincronizado"] = True
 
 if "alerta_ruptura" not in st.session_state:
     st.session_state["alerta_ruptura"] = None
 
 # ─────────────────────────────────────────────────────────────
-# INTERFACE PRINCIPAL E ALERTAS VISUAIS
+# INTERFACE PRINCIPAL
 # ─────────────────────────────────────────────────────────────
 st.title("📦 Controle de Estoque")
-st.caption("Controle de insumos de limpeza e operações com sincronização em nuvem")
+st.caption("Controle logístico de insumos com Curva ABC e integração de BI")
 
-# Gatilho visual de alerta de ruptura
 if st.session_state["alerta_ruptura"]:
     st.warning(st.session_state["alerta_ruptura"], icon="🚨")
-    # Limpa o alerta para que não fique fixo na tela na próxima interação
     st.session_state["alerta_ruptura"] = None
 
 st.divider()
@@ -202,6 +224,25 @@ with aba_painel:
 
     if not produtos_df.empty:
         produtos_df["valor_total"] = produtos_df["saldo_atual"] * produtos_df["valor_unitario"]
+        
+        # --- CÁLCULO DA CURVA ABC ---
+        df_abc = produtos_df[produtos_df["valor_total"] > 0].copy()
+        if not df_abc.empty:
+            df_abc = df_abc.sort_values(by="valor_total", ascending=False)
+            df_abc["perc"] = df_abc["valor_total"] / df_abc["valor_total"].sum()
+            df_abc["perc_acumulado"] = df_abc["perc"].cumsum()
+
+            def classificar_abc(perc):
+                if perc <= 0.80: return 'A'
+                elif perc <= 0.95: return 'B'
+                else: return 'C'
+
+            df_abc["Curva ABC"] = df_abc["perc_acumulado"].apply(classificar_abc)
+            produtos_df = produtos_df.merge(df_abc[["id", "Curva ABC"]], on="id", how="left").fillna({"Curva ABC": "-"})
+        else:
+            produtos_df["Curva ABC"] = "-"
+        # ----------------------------
+
         total_itens = len(produtos_df)
         total_saldo = int(produtos_df["saldo_atual"].sum())
         saldo_baixo = int((produtos_df["saldo_atual"] < produtos_df["estoque_minimo"]).sum())
@@ -221,9 +262,10 @@ with aba_painel:
 
         with col1:
             st.markdown("### 📦 Posição de Estoque")
+            # Adicionada a coluna Classe na visualização
             st.dataframe(
-                produtos_df[["nome", "saldo_atual", "estoque_minimo", "valor_unitario", "valor_total"]].rename(columns={
-                    "nome": "Produto", "saldo_atual": "Saldo", "estoque_minimo": "Mínimo", 
+                produtos_df[["Curva ABC", "nome", "saldo_atual", "estoque_minimo", "valor_unitario", "valor_total"]].rename(columns={
+                    "Curva ABC": "Classe", "nome": "Produto", "saldo_atual": "Saldo", "estoque_minimo": "Mínimo", 
                     "valor_unitario": "Valor Un.", "valor_total": "Total"
                 }),
                 width="stretch", hide_index=True
@@ -273,7 +315,7 @@ with aba_painel:
                     consumo_pivot = consumo_tempo.pivot(index="Data", columns="produto", values="quantidade").fillna(0)
                     st.line_chart(consumo_pivot)
                 else:
-                    st.info("Registre saídas para visualizar o gráfico ao longo do tempo.")
+                    st.info("Registre saídas para visualizar o gráfico.")
             else:
                 st.info("Ainda não há movimentações.")
 
@@ -285,7 +327,7 @@ with aba_painel:
                     grafico = saidas_df.groupby("produto")["quantidade"].sum().abs().sort_values(ascending=False)
                     st.bar_chart(grafico)
                 else:
-                    st.info("Registre saídas para gerar o gráfico de barras.")
+                    st.info("Registre saídas para gerar o gráfico.")
     else:
         st.info("Cadastre produtos para visualizar o painel.")
 
@@ -316,12 +358,15 @@ with aba_entrada:
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Entrada", int(qty), novo_saldo, obs)
-            enviar_para_o_drive()
-            st.toast("Entrada registrada e sincronizada!", icon="📥")
+            
+            with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                sincronizar_tudo()
+            
+            st.toast("Entrada registrada e dados exportados!", icon="📥")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# SAÍDA (Com Alerta de Ruptura)
+# SAÍDA
 # ═════════════════════════════════════════════════════════════
 with aba_saida:
     st.subheader("Registrar Saída")
@@ -343,20 +388,21 @@ with aba_saida:
 
         if st.button("✅ Registrar Saída", type="primary"):
             novo_saldo = saldo_atual - int(qty)
-            
-            # Checagem de ruptura
             if novo_saldo < estoque_min:
-                st.session_state["alerta_ruptura"] = f"Atenção: O saldo de '{nome_sel}' caiu para {novo_saldo} un., ficando abaixo do mínimo de segurança ({estoque_min})."
+                st.session_state["alerta_ruptura"] = f"Atenção: O saldo de '{nome_sel}' caiu para {novo_saldo} un., ficando abaixo do mínimo ({estoque_min})."
             
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Saída", -int(qty), novo_saldo, obs)
-            enviar_para_o_drive()
-            st.toast("Saída registrada com sucesso!", icon="📤")
+                
+            with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                sincronizar_tudo()
+                
+            st.toast("Saída registrada e dados exportados!", icon="📤")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# AJUSTE (Com Alerta de Ruptura)
+# AJUSTE
 # ═════════════════════════════════════════════════════════════
 with aba_ajuste:
     st.subheader("Ajuste de Estoque")
@@ -378,19 +424,21 @@ with aba_ajuste:
 
         diferenca = int(novo_saldo) - saldo_atual
         if st.button("✅ Aplicar Ajuste", type="primary"):
-            
             if novo_saldo < estoque_min:
-                st.session_state["alerta_ruptura"] = f"Atenção: O ajuste deixou '{nome_sel}' com {novo_saldo} un., abaixo do mínimo de segurança ({estoque_min})."
+                st.session_state["alerta_ruptura"] = f"Atenção: O ajuste deixou '{nome_sel}' abaixo do mínimo ({estoque_min})."
 
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, int(novo_saldo))
                 registrar_movimentacao(conn, id_sel, "Ajuste", diferenca, int(novo_saldo), obs)
-            enviar_para_o_drive()
-            st.toast("Ajuste realizado e sincronizado!", icon="🔧")
+                
+            with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                sincronizar_tudo()
+                
+            st.toast("Ajuste realizado e dados exportados!", icon="🔧")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# CONTAGEM (Com Alerta de Ruptura)
+# CONTAGEM
 # ═════════════════════════════════════════════════════════════
 with aba_contagem:
     st.subheader("Inventário / Contagem")
@@ -415,15 +463,17 @@ with aba_contagem:
         c4.metric("Divergência %", f"{divergencia_pct:.1f}%")
 
         if st.button("✅ Registrar Contagem", type="primary"):
-            
             if estoque_fisico < estoque_min:
-                st.session_state["alerta_ruptura"] = f"Atenção: A contagem revelou que '{nome_sel}' está com {estoque_fisico} un., abaixo do mínimo de segurança ({estoque_min})."
+                st.session_state["alerta_ruptura"] = f"Atenção: A contagem revelou que '{nome_sel}' está abaixo do mínimo ({estoque_min})."
 
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, estoque_fisico)
                 registrar_movimentacao(conn, id_sel, "Contagem", -consumo, estoque_fisico, "Contagem semanal")
-            enviar_para_o_drive()
-            st.toast("Contagem registrada com sucesso!", icon="📋")
+                
+            with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                sincronizar_tudo()
+                
+            st.toast("Contagem registrada e dados exportados!", icon="📋")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -480,7 +530,8 @@ with aba_cadastro:
             else:
                 ok, msg = cadastrar_produto(nome_novo.strip(), estoque_minimo, valor_unitario)
                 if ok:
-                    enviar_para_o_drive()
+                    with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                        sincronizar_tudo()
                     st.toast("Produto cadastrado com sucesso!", icon="➕")
                     st.rerun()
                 else:
@@ -495,7 +546,8 @@ with aba_cadastro:
             st.warning("Ao excluir um produto, todo o histórico de movimentação dele será apagado.")
             if st.button("🗑️ Confirmar Exclusão"):
                 deletar_produto(opcoes_del[nome_del])
-                enviar_para_o_drive()
+                with st.spinner("Sincronizando banco e exportando CSVs para o BI..."):
+                    sincronizar_tudo()
                 st.toast("Produto excluído com sucesso!", icon="🗑️")
                 st.rerun()
         else:
