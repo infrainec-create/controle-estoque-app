@@ -1,3 +1,4 @@
+import google.generativeai as genai
 import streamlit as st
 import sqlite3
 from datetime import datetime
@@ -211,9 +212,57 @@ if st.session_state["alerta_ruptura"]:
 
 st.divider()
 
-aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
-    "📊 Painel", "⬇️ Entrada", "⬆️ Saída", "🔧 Ajuste", "📋 Contagem", "📜 Histórico", "➕ Produtos"
+aba_ia, aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
+    "🧠 Assistente IA", "📊 Painel", "⬇️ Entrada", "⬆️ Saída", "🔧 Ajuste", "📋 Contagem", "📜 Histórico", "➕ Produtos"
 ])
+# ═════════════════════════════════════════════════════════════
+# ASSISTENTE IA (GEMINI)
+# ═════════════════════════════════════════════════════════════
+with aba_ia:
+    st.subheader("🤖 Analista Logístico Virtual")
+    st.markdown("Use a Inteligência Artificial para analisar seu estoque atual e obter recomendações.")
+    
+    if st.button("✨ Gerar Análise de Estoque", type="primary"):
+        produtos_df = listar_produtos()
+        
+        if produtos_df.empty:
+            st.warning("Cadastre produtos para a IA analisar.")
+        else:
+            with st.spinner("A IA está analisando seus dados de estoque..."):
+                try:
+                    # Configura a API com o seu segredo
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    
+                    # Prepara a tabela de dados para a IA ler
+                    dados_texto = produtos_df[["nome", "saldo_atual", "estoque_minimo"]].to_string(index=False)
+                    
+                    # Cria o Prompt (O comando para a IA)
+                    prompt = f"""
+                    Você é um especialista em logística e gestão de estoque de insumos de limpeza.
+                    Analise os dados atuais do meu estoque abaixo. As colunas são Nome do Produto, Saldo Atual e Estoque Mínimo.
+                    
+                    Dados do Estoque:
+                    {dados_texto}
+                    
+                    Com base nisso, me dê:
+                    1. Um resumo da situação geral.
+                    2. Alertas de produtos que estão críticos (abaixo do mínimo) ou quase lá.
+                    3. Uma recomendação estratégica de reposição.
+                    
+                    Responda de forma direta, profissional e use bullet points para facilitar a leitura.
+                    """
+                    
+                    # Chama o modelo do Gemini
+                    modelo = genai.GenerativeModel('gemini-1.5-flash')
+                    resposta = modelo.generate_content(prompt)
+                    
+                    st.success("Análise concluída!")
+                    st.markdown("### 📊 Insights do Assistente:")
+                    st.write(resposta.text)
+                    
+                except Exception as e:
+                    st.error(f"Erro ao conectar com a IA: {e}")
+    st.divider()
 
 # ═════════════════════════════════════════════════════════════
 # PAINEL
