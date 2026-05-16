@@ -62,11 +62,9 @@ def enviar_para_o_drive():
         media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
         
         if ficheiros:
-            # Atualiza o ficheiro existente
             id_ficheiro = ficheiros[0]['id']
             servico.files().update(fileId=id_ficheiro, media_body=media).execute()
         else:
-            # Cria um novo ficheiro
             servico.files().create(body=metadados, media_body=media).execute()
     except Exception as e:
         st.error(f"Erro ao enviar para o Google Drive: {e}")
@@ -165,21 +163,30 @@ def deletar_produto(id_produto):
         conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO CONTROLADA COM FLUXO DE NUVEM
+# INICIALIZAÇÃO CONTROLADA
 # ─────────────────────────────────────────────────────────────
-if "db_sincronizado" not  in st.session_state:
-    # Tenta descarregar o backup do Drive. Se não existir, cria um novo local
+if "db_sincronizado" not in st.session_state:
     existe_no_drive = descarregar_do_drive()
     init_db()
     if not existe_no_drive:
         enviar_para_o_drive()
     st.session_state["db_sincronizado"] = True
 
+if "alerta_ruptura" not in st.session_state:
+    st.session_state["alerta_ruptura"] = None
+
 # ─────────────────────────────────────────────────────────────
-# INTERFACE PRINCIPAL
+# INTERFACE PRINCIPAL E ALERTAS VISUAIS
 # ─────────────────────────────────────────────────────────────
 st.title("📦 Controle de Estoque")
 st.caption("Controle de insumos de limpeza e operações com sincronização em nuvem")
+
+# Gatilho visual de alerta de ruptura
+if st.session_state["alerta_ruptura"]:
+    st.warning(st.session_state["alerta_ruptura"], icon="🚨")
+    # Limpa o alerta para que não fique fixo na tela na próxima interação
+    st.session_state["alerta_ruptura"] = None
+
 st.divider()
 
 aba_painel, aba_entrada, aba_saida, aba_ajuste, aba_contagem, aba_historico, aba_cadastro = st.tabs([
@@ -310,11 +317,11 @@ with aba_entrada:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Entrada", int(qty), novo_saldo, obs)
             enviar_para_o_drive()
-            st.success("Entrada registrada e sincronizada com o Drive!")
+            st.toast("Entrada registrada e sincronizada!", icon="📥")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# SAÍDA
+# SAÍDA (Com Alerta de Ruptura)
 # ═════════════════════════════════════════════════════════════
 with aba_saida:
     st.subheader("Registrar Saída")
@@ -326,6 +333,7 @@ with aba_saida:
         nome_sel = st.selectbox("Produto", list(opcoes.keys()), key="sai_prod")
         id_sel = opcoes[nome_sel]
         saldo_atual = int(produtos_df.loc[produtos_df["id"] == id_sel, "saldo_atual"].values[0])
+        estoque_min = int(produtos_df.loc[produtos_df["id"] == id_sel, "estoque_minimo"].values[0])
 
         col1, col2 = st.columns(2)
         with col1:
@@ -335,15 +343,20 @@ with aba_saida:
 
         if st.button("✅ Registrar Saída", type="primary"):
             novo_saldo = saldo_atual - int(qty)
+            
+            # Checagem de ruptura
+            if novo_saldo < estoque_min:
+                st.session_state["alerta_ruptura"] = f"Atenção: O saldo de '{nome_sel}' caiu para {novo_saldo} un., ficando abaixo do mínimo de segurança ({estoque_min})."
+            
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, novo_saldo)
                 registrar_movimentacao(conn, id_sel, "Saída", -int(qty), novo_saldo, obs)
             enviar_para_o_drive()
-            st.success("Saída registrada e sincronizada com o Drive!")
+            st.toast("Saída registrada com sucesso!", icon="📤")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# AJUSTE
+# AJUSTE (Com Alerta de Ruptura)
 # ═════════════════════════════════════════════════════════════
 with aba_ajuste:
     st.subheader("Ajuste de Estoque")
@@ -355,6 +368,7 @@ with aba_ajuste:
         nome_sel = st.selectbox("Produto", list(opcoes.keys()), key="aju_prod")
         id_sel = opcoes[nome_sel]
         saldo_atual = int(produtos_df.loc[produtos_df["id"] == id_sel, "saldo_atual"].values[0])
+        estoque_min = int(produtos_df.loc[produtos_df["id"] == id_sel, "estoque_minimo"].values[0])
 
         col1, col2 = st.columns(2)
         with col1:
@@ -364,15 +378,19 @@ with aba_ajuste:
 
         diferenca = int(novo_saldo) - saldo_atual
         if st.button("✅ Aplicar Ajuste", type="primary"):
+            
+            if novo_saldo < estoque_min:
+                st.session_state["alerta_ruptura"] = f"Atenção: O ajuste deixou '{nome_sel}' com {novo_saldo} un., abaixo do mínimo de segurança ({estoque_min})."
+
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, int(novo_saldo))
                 registrar_movimentacao(conn, id_sel, "Ajuste", diferenca, int(novo_saldo), obs)
             enviar_para_o_drive()
-            st.success("Ajuste realizado e sincronizado!")
+            st.toast("Ajuste realizado e sincronizado!", icon="🔧")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
-# CONTAGEM
+# CONTAGEM (Com Alerta de Ruptura)
 # ═════════════════════════════════════════════════════════════
 with aba_contagem:
     st.subheader("Inventário / Contagem")
@@ -384,6 +402,7 @@ with aba_contagem:
         nome_sel = st.selectbox("Produto", list(opcoes.keys()), key="cnt_prod")
         id_sel = opcoes[nome_sel]
         saldo_sistemico = int(produtos_df.loc[produtos_df["id"] == id_sel, "saldo_atual"].values[0])
+        estoque_min = int(produtos_df.loc[produtos_df["id"] == id_sel, "estoque_minimo"].values[0])
 
         estoque_fisico = st.number_input("Estoque físico (contado)", min_value=0, step=1, key="cnt_qty")
         consumo = saldo_sistemico - int(estoque_fisico)
@@ -396,11 +415,15 @@ with aba_contagem:
         c4.metric("Divergência %", f"{divergencia_pct:.1f}%")
 
         if st.button("✅ Registrar Contagem", type="primary"):
+            
+            if estoque_fisico < estoque_min:
+                st.session_state["alerta_ruptura"] = f"Atenção: A contagem revelou que '{nome_sel}' está com {estoque_fisico} un., abaixo do mínimo de segurança ({estoque_min})."
+
             with get_conn() as conn:
                 atualizar_saldo(conn, id_sel, estoque_fisico)
                 registrar_movimentacao(conn, id_sel, "Contagem", -consumo, estoque_fisico, "Contagem semanal")
             enviar_para_o_drive()
-            st.success("Contagem registada e base sincronizada!")
+            st.toast("Contagem registrada com sucesso!", icon="📋")
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════
@@ -458,7 +481,7 @@ with aba_cadastro:
                 ok, msg = cadastrar_produto(nome_novo.strip(), estoque_minimo, valor_unitario)
                 if ok:
                     enviar_para_o_drive()
-                    st.success(msg + " Sincronizado com o Drive!")
+                    st.toast("Produto cadastrado com sucesso!", icon="➕")
                     st.rerun()
                 else:
                     st.error(msg)
@@ -473,7 +496,7 @@ with aba_cadastro:
             if st.button("🗑️ Confirmar Exclusão"):
                 deletar_produto(opcoes_del[nome_del])
                 enviar_para_o_drive()
-                st.success("Produto excluído e base sincronizada!")
+                st.toast("Produto excluído com sucesso!", icon="🗑️")
                 st.rerun()
         else:
             st.info("Nenhum produto cadastrado.")
