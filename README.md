@@ -1,88 +1,25 @@
-# 📦 Sistema de Controle de Estoque
+# 📦 Controle de Estoque Inteligente (Cloud & AI)
 
-App de estoque com Streamlit + SQLite. Funciona direto no Chromebook via Linux (Crostini).
+Um sistema de gestão de insumos e controle logístico desenvolvido em **Python (Streamlit)**, concebido para operações de alto giro e ambientes de *fulfillment*. O aplicativo transforma o registro operacional básico num *pipeline* de dados automatizado, fornecendo inteligência de negócio e gestão visual para evitar rupturas de estoque.
 
----
+## 🚀 Funcionalidades Principais
 
-## Instalação (passo a passo)
+* **Gestão à Vista (Semáforo):** Classificação visual automática (🔴 Crítico, 🟡 Atenção, 🟢 Saudável) baseada no cruzamento entre o saldo atual e o estoque mínimo.
+* **Inteligência Logística (Curva ABC):** Classificação automática do peso financeiro de cada insumo no inventário, permitindo focar auditorias nos itens de Classe A.
+* **Cálculo de WMS (Lead Time):** Sugestões de compras dinâmicas baseadas no consumo médio e no tempo de entrega (Lead Time) do fornecedor.
+* **Assistente de IA Integrado:** Conexão direta com a API do **Google Gemini**, atuando como um analista virtual que audita os dados e gera relatórios estratégicos de reposição.
+* **Pipeline ETL em Nuvem:** Sincronização em tempo real do banco de dados SQLite com o Google Drive. A cada movimentação, o sistema exporta arquivos `.csv` limpos, prontos para consumo em *dashboards* do Looker Studio ou *queries* no BigQuery.
 
-### 1. Abrir o terminal Linux no Chromebook
+## 🛠️ Tecnologias Utilizadas
 
-Vá em **Configurações → Avançado → Ambiente de desenvolvimento Linux** e ative o Linux.
+* **Python 3**
+* **Streamlit:** Interface de usuário ágil e responsiva.
+* **Pandas & SQLite3:** Manipulação de dados e banco de dados relacional.
+* **Google Drive API:** Armazenamento em nuvem via Conta de Serviço (Service Account).
+* **Google Generative AI:** Geração de insights via modelo Gemini.
 
-### 2. Instalar as dependências
+## ⚙️ Como Executar Localmente
 
-```bash
-pip install streamlit pandas --break-system-packages
-```
-
-> Se der erro, tente: `pip3 install streamlit pandas`
-
-### 3. Rodar o app
-
-Coloque os arquivos `app.py` e `requirements.txt` em uma pasta (ex: `~/estoque`) e rode:
-
-```bash
-cd ~/estoque
-streamlit run app.py
-```
-
-O app vai abrir automaticamente no navegador em `http://localhost:8501`.
-
----
-
-## Funcionalidades
-
-| Aba | O que faz |
-|---|---|
-| 📊 Painel | Visão geral com métricas e lista de produtos |
-| ⬇️ Entrada | Registra recebimento de mercadoria |
-| ⬆️ Saída | Registra baixa ou envio |
-| 🔧 Ajuste | Corrige saldo manualmente (avaria, perda) |
-| 📋 Contagem Semanal | Você informa o físico, o app calcula o consumo |
-| 📜 Histórico | Todas as movimentações com filtro por tipo |
-| ➕ Cadastrar Produto | Adiciona novos produtos ao sistema |
-
----
-
-## Lógica da contagem semanal
-
-```
-Consumo = Saldo Sistêmico − Estoque Físico Contado
-Novo Saldo = Estoque Físico Contado
-```
-
-O sistema registra automaticamente uma movimentação do tipo **"Contagem"** com o consumo calculado.
-
----
-
-## Banco de dados
-
-O SQLite cria o arquivo `estoque.db` automaticamente na mesma pasta do `app.py`.
-Para fazer backup, basta copiar esse arquivo.
-
-Para abrir o banco e fazer consultas SQL diretamente:
-
-```bash
-sqlite3 estoque.db
-```
-
-Consultas úteis:
-
-```sql
--- Ver todos os produtos
-SELECT * FROM produtos;
-
--- Ver movimentações da semana
-SELECT p.nome, m.tipo, m.quantidade, m.saldo_resultante, m.data_hora
-FROM movimentacoes m
-JOIN produtos p ON p.id = m.id_produto
-ORDER BY m.id DESC;
-
--- Consumo total por produto (contagens semanais)
-SELECT p.nome, SUM(ABS(m.quantidade)) AS consumo_total
-FROM movimentacoes m
-JOIN produtos p ON p.id = m.id_produto
-WHERE m.tipo = 'Contagem'
-GROUP BY p.nome;
-```
+1. Clone este repositório:
+   ```bash
+   git clone [https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git](https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git)
