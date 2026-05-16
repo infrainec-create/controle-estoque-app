@@ -1,2 +1,3 @@
 .venv/
 estoque.db
+.streamlit/secrets.toml
