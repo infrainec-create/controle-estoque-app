@@ -233,12 +233,17 @@ with aba_painel:
         # Junta os dados de consumo à tabela de produtos principal
         produtos_df = produtos_df.merge(df_compra, on="id", how="left")
         
-        # Fórmulas Avançadas processadas no Pandas (Sem tocar no DB)
-        produtos_df["consumo_diario"] = produtos_df["consumo_total"] / 30
+      # Fórmulas Avançadas processadas no Pandas (Sem tocar no DB)
+        produtos_df["consumo_diario"] = produtos_df["consumo_total"].fillna(0) / 30
         
-        # Cobertura de Estoque (Dias para Esgotar)
-        produtos_df["Dias de Cobertura"] = np.where(produtos_df["consumo_diario"] > 0, (produtos_df["saldo_atual"] / produtos_df["consumo_diario"]).astype(int), 999)
-        produtos_df["Dias de Cobertura"] = produtos_df["Dias de Cobertura"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
+        # Cobertura de Estoque (Dias para Esgotar) - Cálculo Seguro
+        produtos_df["Dias de Cobertura"] = 999 # Valor padrão para evitar divisão por zero
+        
+        # Cria uma máscara para calcular apenas onde há consumo
+        mask = produtos_df["consumo_diario"] > 0
+        produtos_df.loc[mask, "Dias de Cobertura"] = (produtos_df.loc[mask, "saldo_atual"] / produtos_df.loc[mask, "consumo_diario"]).astype(int)
+
+        produtos_df["Dias de Cobertura"] = produtos_df["Dias de Cobertura"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias") 
 
         # Semáforo Melhorado (Baseado também na Cobertura)
         def status_avancado(row):
