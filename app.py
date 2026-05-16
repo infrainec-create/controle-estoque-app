@@ -19,7 +19,6 @@ st.set_page_config(page_title="WMS 4.0 - Inteligência Logística", page_icon="�
 # CSS Moderno e Responsivo
 st.markdown("""
     <style>
-    /* Estilização de botões e inputs para facilitar o toque no Mobile */
     .stButton>button {
         border-radius: 10px;
         font-weight: 600;
@@ -27,7 +26,6 @@ st.markdown("""
         width: 100%;
         margin-top: 10px;
     }
-    /* Estilo de Card para métricas */
     .metric-card {
         background-color: #ffffff;
         padding: 20px;
@@ -36,11 +34,9 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 15px;
     }
-    /* Ajuste para inputs ficarem maiores no celular */
     .stNumberInput, .stTextInput, .stSelectbox {
         margin-bottom: 10px;
     }
-    /* Esconder o menu lateral se necessário para ganhar espaço */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -73,7 +69,6 @@ def descarregar_do_drive():
     return False
 
 def sincronizar_tudo():
-    # Envia o banco e gera os CSVs para o Looker
     try:
         servico = obter_servico_drive()
         query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
@@ -82,7 +77,6 @@ def sincronizar_tudo():
         if files: servico.files().update(fileId=files[0]['id'], media_body=media).execute()
         else: servico.files().create(body={'name': DB_PATH, 'parents': [FOLDER_ID]}, media_body=media).execute()
         
-        # Exportação Looker
         prods = listar_produtos()
         movs = listar_movimentacoes()
         for df, name in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
@@ -166,13 +160,20 @@ with aba_painel:
     if not df.empty:
         df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
         
-        # Lógica de Semáforo e Runway (Cobertura)
+        # --- LÓGICA DE INTELIGÊNCIA LOGÍSTICA AJUSTADA ---
+        # Captura consumo de Saídas E divergências negativas de Contagem (reduções de estoque)
         with get_conn() as conn:
-            cons = pd.read_sql("SELECT id_produto, SUM(ABS(quantidade)) as total FROM movimentacoes WHERE tipo='Saída' GROUP BY id_produto", conn)
+            cons = pd.read_sql("""
+                SELECT id_produto, SUM(ABS(quantidade)) as total 
+                FROM movimentacoes 
+                WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
+                GROUP BY id_produto
+            """, conn)
+            
         df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
         df['consumo_diario'] = df['total'] / 30
         
-        # Cálculo Seguro de Cobertura
+        # Cálculo Seguro de Cobertura (Evita divisão por zero)
         mask = df['consumo_diario'] > 0
         df['Runway'] = 999
         df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
@@ -185,16 +186,23 @@ with aba_painel:
         df['Status'] = df.apply(set_status, axis=1)
         df['Runway'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-        # Layout Responsivo: Colunas que viram linhas no mobile
+        # Layout Adaptável (Computador, Celular e Tablet)
         c1, c2, c3, c4 = st.columns([1,1,1,1])
         c1.markdown(f'<div class="metric-card">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-card">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="metric-card">Itens Críticos<br><b>{(df["saldo_atual"] < df["estoque_minimo"]).sum()}</b></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="metric-card">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-card">Giro Total (Consumo)<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
 
         st.divider()
         st.subheader("📋 Posição de Estoque")
         st.dataframe(df[['Status', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'Runway']].rename(columns={'categoria':'Setor', 'nome':'Produto'}), hide_index=True, use_container_width=True)
+
+        st.divider()
+        st.subheader("🛒 Sugestão de Reposição (Cálculo Semanal WMS)")
+        df["Minimo Ideal"] = (df["consumo_diario"] * df["lead_time"] * 1.2).astype(int)
+        df["Alvo"] = df[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
+        df["Sugestão Compra"] = (df["Alvo"] - df["saldo_atual"]).clip(lower=0)
+        st.dataframe(df[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, use_container_width=True)
 
 # OPERAÇÃO (SAÍDAS E ENTRADAS)
 with aba_operacao:
@@ -203,7 +211,7 @@ with aba_operacao:
         col_s, col_e = st.columns(2)
         with col_s:
             with st.container(border=True):
-                st.subheader("⬆️ Registrar Saída")
+                st.subheader("📤 Registrar Saída")
                 ops = dict(zip(df["nome"], df["id"]))
                 sel = st.selectbox("Produto", list(ops.keys()), key="s_p")
                 id_p = ops[sel]
@@ -231,10 +239,10 @@ with aba_operacao:
                     sincronizar_tudo()
                     st.rerun()
 
-# ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM (SEM DISTRAÇÕES)
+# ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM (FOCADO E ISOLADO)
 with aba_contagem:
     st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Utilize esta aba para realizar a contagem física. O sistema gerará um ajuste automático baseado na diferença encontrada.")
+    st.info("Utilize esta aba para realizar a contagem física semanal. O sistema gerará as taxas de consumo com base nas reduções apuradas aqui.")
     df = listar_produtos()
     if not df.empty:
         with st.container(border=True):
@@ -243,20 +251,21 @@ with aba_contagem:
             id_pc = ops[sel_c]
             s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
             
-            st.metric("Saldo no Sistema", f"{s_sis} un")
-            f_cont = st.number_input("Quantidade Contada na Prateleira", min_value=0, step=1, key="c_q")
+            st.metric("Saldo Atual no Sistema", f"{s_sis} un")
+            f_cont = st.number_input("Quantidade Física Contada na Prateleira", min_value=0, step=1, key="c_q")
             
             diff = f_cont - s_sis
             if diff == 0: st.success("✅ Saldo bate perfeitamente com o sistema.")
-            else: st.warning(f"⚠️ Divergência detectada: {diff} unidades.")
+            elif diff < 0: st.warning(f"📉 Consumo/Baixa detectada: {abs(diff)} unidades retiradas desde o último controle.")
+            else: st.info(f"📈 Ajuste positivo: {diff} unidades adicionadas.")
             
-            if st.button("💾 Gravar e Atualizar Inventário", use_container_width=True, type="primary"):
+            if st.button("💾 Gravar e Sincronizar Inventário", use_container_width=True, type="primary"):
                 with get_conn() as conn:
                     conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
                     data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                     conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, 'Inventário Semanal')", (id_pc, data, diff, f_cont))
                 sincronizar_tudo()
-                st.toast("Contagem Registrada!", icon="✅")
+                st.toast("Inventário Sincronizado!", icon="✅")
                 st.rerun()
 
 # IA ANALISTA
@@ -267,8 +276,10 @@ with aba_ia:
         if not df.empty:
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                mod = genai.GenerativeModel('gemini-pro')
-                prompt = f"Analise o estoque e me dê 3 alertas críticos e sugestão de compra:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time']].to_string()}"
+                modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                mod_name = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
+                mod = genai.GenerativeModel(mod_name)
+                prompt = f"Analise o estoque e me dê alertas críticos considerando o consumo gerado pelas contagens semanais:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time']].to_string()}"
                 st.write(mod.generate_content(prompt).text)
             except: st.error("Erro na conexão com IA.")
 
