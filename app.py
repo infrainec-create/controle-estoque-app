@@ -253,7 +253,7 @@ with aba_ia:
                     """
                     
                     # Chama o modelo do Gemini
-                    modelo = genai.GenerativeModel('gemini-1.5-flash')
+                    modelo = genai.GenerativeModel('gemini-pro')
                     resposta = modelo.generate_content(prompt)
                     
                     st.success("Análise concluída!")
