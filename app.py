@@ -13,7 +13,7 @@ import numpy as np
 import threading
 
 # ─────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO AVANÇADO
+# CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO ADAPTÁVEL
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="WMS 4.0 - Alta Performance", page_icon="📦", layout="wide")
 
@@ -26,12 +26,12 @@ st.markdown("""
         width: 100%;
         margin-top: 10px;
     }
+    /* Removido o background-color fixo #ffffff para respeitar o modo escuro do sistema */
     .metric-card {
-        background-color: #ffffff;
         padding: 20px;
         border-radius: 12px;
         border-top: 4px solid #0052cc;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 15px;
     }
     .stNumberInput, .stTextInput, .stSelectbox {
@@ -187,7 +187,7 @@ with aba_painel:
             cons = pd.read_sql("""
                 SELECT id_produto, SUM(ABS(quantidade)) as total 
                 FROM movimentacoes 
-                WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
+                WHERE tipo='Saída' OR (tipo='Contagem' AND quantity < 0)
                 GROUP BY id_produto
             """, conn)
             
@@ -247,7 +247,8 @@ with aba_operacao:
                     with get_conn() as conn:
                         conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ? WHERE id = ?", (qe, id_pe))
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, Scientific_mode, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
+                        # CORRIGIDO: Removida a coluna fantasma 'Scientific_mode' que quebrava o SQL
+                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
                     disparar_sincronizacao()
                     st.rerun()
 
@@ -273,7 +274,7 @@ with aba_operacao:
 # ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM
 with aba_contagem:
     st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Aba dedicada para auditoria física. O consumo da operação é calculado através destas contagens.")
+    st.info("Aba dedicada para auditoria física. O consumo da operação é calculated através destas contagens.")
     df = listar_produtos()
     if not df.empty:
         with st.container(border=True):
@@ -334,7 +335,6 @@ with aba_historico:
     st.subheader("📜 Histórico de Movimentações")
     mv = listar_movimentacoes()
     if not mv.empty:
-        # Extrai com segurança o formato MM/AAAA da string 'DD/MM/AAAA HH:MM'
         mv['Mês/Ano'] = mv['data_hora'].apply(lambda x: x.split()[0][3:])
         meses_disponiveis = sorted(mv['Mês/Ano'].unique(), reverse=True)
         
@@ -342,7 +342,6 @@ with aba_historico:
         with c_filt:
             mes_selecionado = st.selectbox("Filtrar Histórico por Período:", meses_disponiveis)
         
-        # Filtra a visualização para economizar memória do ecrã
         mv_filtrado = mv[mv['Mês/Ano'] == mes_selecionado].drop(columns=['Mês/Ano'])
         
         st.dataframe(mv_filtrado, use_container_width=True, hide_index=True)
@@ -395,10 +394,8 @@ with aba_gestao:
             
             st.warning(f"⚠️ **Aviso de Integridade:** Eliminar o item '{s_d}' irá apagar permanentemente o seu registo do cadastro e **destruirá todo o histórico de movimentações** associado. Esta ação não pode ser desfeita.")
             
-            # ETAPA 1: Confirmação lógica via Checkbox
             confirmar_exclusao = st.checkbox("Confirmo que verifiquei os dados e pretendo apagar este insumo e o seu histórico definitivamente.", key="del_check")
             
-            # ETAPA 2: Botão perigoso destrancado apenas se o Checkbox for marcado
             if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar_exclusao, key="del_btn"):
                 deletar_produto(id_d)
                 disparar_sincronizacao()
