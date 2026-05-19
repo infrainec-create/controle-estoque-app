@@ -1,0 +1,4 @@
+[theme]
+primaryColor = "#0052cc"
+# Deixando as outras cores de fundo de fora, o Streamlit ativa o modo automático (System)
+# Mas mantém o menu manual 100% funcional para o utilizador alternar
