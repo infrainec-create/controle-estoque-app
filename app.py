@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 import numpy as np
 import threading
+import hashlib
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO SEGURO
@@ -45,6 +46,14 @@ st.markdown("""
 # ─── VARIÁVEIS GLOBAIS ───
 DB_PATH = "estoque.db"
 FOLDER_ID = st.secrets["FOLDER_ID"]
+
+# ─────────────────────────────────────────────────────────────
+# FUNÇÕES DE SEGURANÇA E CONEXÃO
+# ─────────────────────────────────────────────────────────────
+def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def gerar_hash_senha(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
 
 # ─────────────────────────────────────────────────────────────
 # OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO (THREADING ASYNC)
@@ -101,10 +110,8 @@ def descarregar_do_drive():
     return False
 
 # ─────────────────────────────────────────────────────────────
-# OPTIMIZAÇÃO 2: MEMÓRIA EM CACHE (`@st.cache_data`)
+# LISTAGEM EM CACHE
 # ─────────────────────────────────────────────────────────────
-def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
-
 @st.cache_data
 def listar_produtos():
     with get_conn() as conn: return pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
@@ -120,6 +127,13 @@ def listar_movimentacoes():
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                usuario TEXT PRIMARY KEY,
+                senha_hash TEXT NOT NULL,
+                pergunta_seguranca TEXT NOT NULL,
+                resposta_seguranca_hash TEXT NOT NULL,
+                aprovado INTEGER DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS produtos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL UNIQUE,
@@ -139,6 +153,11 @@ def init_db():
                 observacao TEXT
             );
         """)
+        
+        try:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
+        except:
+            pass
 
 def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time):
     try:
@@ -164,392 +183,460 @@ if "db_sincronizado" not in st.session_state:
     init_db()
     st.session_state["db_sincronizado"] = True
 
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
+    st.session_state["usuario_atual"] = ""
+
 # ─────────────────────────────────────────────────────────────
-# INTERFACE PRINCIPAL
+# FLUXO DE LOGIN / ACESSO DO USUÁRIO (COM FILTRO DE APROVAÇÃO)
 # ─────────────────────────────────────────────────────────────
-st.title("📦 WMS Inteligente")
-st.caption("Controle Operacional Avançado | Performance Otimizada")
-
-aba_painel, aba_operacao, aba_contagem, aba_ia, aba_historico, aba_gestao = st.tabs([
-    "📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "🧠 IA Analista", "📜 Histórico", "⚙️ Config"
-])
-
-# PAINEL
-with aba_painel:
-    df = listar_produtos()
-    if not df.empty:
-        df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
-        
-        with get_conn() as conn:
-            cons = pd.read_sql("""
-                SELECT id_produto, SUM(ABS(quantidade)) as total 
-                FROM movimentacoes 
-                WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
-                GROUP BY id_produto
-            """, conn)
-            
-        df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
-        df['consumo_diario'] = df['total'] / 30
-        
-        mask = df['consumo_diario'] > 0
-        df['Runway'] = 999
-        df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
-        
-        def set_status(row):
-            if row['saldo_atual'] <= 0: return '🔴 Ruptura'
-            if row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
-            if row['Runway'] != 999 and row['Runway'] <= row['lead_time']: return '🟠 Risco'
-            return '🟢 OK'
-        df['Status'] = df.apply(set_status, axis=1)
-        df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
-
-        # CARDS DE MÉTRICAS DINÂMICOS
-        itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
-        if itens_criticos > 0:
-            card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
-        else:
-            card_critico_style = 'background-color: rgba(16, 185, 129, 0.15); border-top: 4px solid #10b859; color: #10b859;'
-
-        c1, c2, c3, c4 = st.columns([1,1,1,1])
-        c1.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-card" style="{card_critico_style}">Itens Críticos/Ruptura<br><b>{itens_criticos}</b></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
-
-        st.divider()
-        
-        # FILTROS AVANÇADOS DE PESQUISA E SETOR
-        cp1, cp2 = st.columns([1, 1])
-        with cp1:
-            setores = ["Todos"] + list(df["categoria"].unique())
-            setor_sel = st.selectbox("⚡ Filtrar por Setor:", setores)
-        with cp2:
-            busca_nome = st.text_input("🔍 Busca Rápida por Nome do Insumo:")
-        
-        df_filtrado = df.copy()
-        if setor_sel != "Todos":
-            df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
-        if busca_nome.strip():
-            df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
-
-        st.subheader("📋 Posição de Estoque")
-        
-        def destacar_status(val):
-            if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
-            if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
-            if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
-            return ''
-
-        display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'valor_unitario', 'estoque_minimo', 'Runway_Txt']].rename(
-            columns={'categoria':'Setor', 'nome':'Produto', 'valor_unitario': 'Preço Médio', 'Runway_Txt':'Cobertura (Runway)'}
-        )
-        
-        st.dataframe(
-            display_df.style.map(destacar_status, subset=['Status']).format({'Preço Médio': 'R$ {:.2f}'}),
-            hide_index=True, width='stretch'
-        )
-
-        # GRÁFICOS NATIVOS DE CONSUMO
-        st.divider()
-        st.subheader("📊 Gráficos de Performance e Movimentação")
-        g1, g2 = st.columns(2)
-        
-        df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
-        
-        with g1:
-            st.markdown("##### 📊 Giro Total (Saídas) por Categoria")
-            giro_setor = df.groupby("categoria")["total"].sum().reset_index().rename(columns={"categoria": "Setor", "total": "Movimentações"})
-            if giro_setor["Movimentações"].sum() > 0:
-                st.bar_chart(data=giro_setor, x="Setor", y="Movimentações", width='stretch')
-            else:
-                st.info("Ainda não há registros de saídas para gerar o gráfico de setores.")
-                
-        with g2:
-            st.markdown("##### 🏆 Top 5 Insumos Mais Consumidos (30 dias)")
-            df_consumo_real = df[df["total"] > 0]
-            if not df_consumo_real.empty:
-                top_consumo = df_consumo_real.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
-                st.bar_chart(data=top_consumo, x="Insumo", y="Quantidade", width='stretch')
-            else:
-                st.info("Ainda não há consumo registrado para listar o ranking.")
-
-        st.divider()
-        st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
-        
-        df_filtrado["Minimo Ideal"] = (df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
-        df_filtrado["Alvo"] = df_filtrado[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
-        df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
-        
-        apenas_compras = st.checkbox("🛒 Mostrar apenas insumos com necessidade de compra urgente")
-        df_compras = df_filtrado.copy()
-        if apenas_compras:
-            df_compras = df_compras[df_compras["Sugestão Compra"] > 0]
-            
-        st.dataframe(df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, width='stretch')
-
-# OPERAÇÃO (SAÍDAS E ENTRADAS COM INVERSÃO E OBSERVAÇÕES)
-with aba_operacao:
-    df = listar_produtos()
-    if not df.empty:
-        col_e, col_s = st.columns(2)
-        
-        with col_e:
-            with st.container(border=True):
-                st.subheader("⬇️ Registrar Entrada")
-                ops = dict(zip(df["nome"], df["id"]))
-                sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
-                id_pe = ops[sel_e]
-                
-                p_atual = df.loc[df["id"]==id_pe].iloc[0]
-                sal_e = int(p_atual["saldo_atual"])
-                pmp_antigo = float(p_atual["valor_unitario"])
-                
-                c1, c2 = st.columns([1, 1])
-                with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
-                with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
-                
-                obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
-                    
-                if st.button("Confirmar Entrada", type="secondary"):
-                    total_novas_unidades = sal_e + qe
-                    if total_novas_unidades > 0:
-                        novo_pmp = ((sal_e * pmp_antigo) + (qe * preco_compra)) / total_novas_unidades
-                    else:
-                        novo_pmp = preco_compra
-                        
-                    with get_conn() as conn:
-                        conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ?, valor_unitario = ? WHERE id = ?", (qe, novo_pmp, id_pe))
-                        data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
-                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
-                    
-                    disparar_sincronizacao()
-                    st.toast(f"📥 Entrada registrada! Novo preço médio de '{sel_e}': R$ {novo_pmp:.2f}", icon="✅")
-                    st.success(f"Entrada Confirmada: {sel_e} (+{qe})")
-                    st.rerun()
-
-        with col_s:
-            with st.container(border=True):
-                st.subheader("📤 Registrar Saída")
-                sel = st.selectbox("Produto ", list(ops.keys()), key="s_p")
-                id_p = ops[sel]
-                max_s = int(df.loc[df["id"]==id_p, "saldo_atual"].values[0])
-                
-                c1, c2 = st.columns([1, 2])
-                with c1: q = st.number_input("Quantidade", min_value=1, key="s_q")
-                with c2: obs_s = st.text_input("Observação/Destino", key="s_obs")
-                
-                if q > max_s:
-                    st.error(f"❌ Estoque Insuficiente! Saldo atual na prateleira é de apenas {max_s} un.")
-                    bloquear_saida = True
-                else:
-                    bloquear_saida = False
-                    
-                if st.button("Confirmar Saída", type="primary", disabled=bloquear_saida):
-                    with get_conn() as conn:
-                        conn.execute("UPDATE produtos SET saldo_atual = saldo_atual - ? WHERE id = ?", (q, id_p))
-                        data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
-                    disparar_sincronizacao()
-                    st.toast(f"📤 Baixa de {q} un. de '{sel}' realizada com sucesso!", icon="🚀")
-                    st.success(f"Saída Confirmada: {sel} (-{q})")
-                    st.rerun()
-
-# ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM
-with aba_contagem:
-    st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Aba dedicada para auditoria física. O consumo da operação é calculated através destas contagens.")
-    df = listar_produtos()
-    if not df.empty:
-        with st.container(border=True):
-            ops = dict(zip(df["nome"], df["id"]))
-            sel_c = st.selectbox("Selecione o Insumo para Contagem", list(ops.keys()), key="c_p")
-            id_pc = ops[sel_c]
-            s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
-            
-            st.metric("Saldo Atual no Sistema", f"{s_sis} un")
-            f_cont = st.number_input("Quantidade Física Contada", min_value=0, step=1, key="c_q")
-            
-            diff = f_cont - s_sis
-            if diff == 0: st.success("✅ Saldo bate perfeitamente com o sistema.")
-            elif diff < 0: st.warning(f"📉 Baixa/Consumo detectado: {abs(diff)} unidades utilizadas.")
-            else: st.info(f"📈 Ajuste positivo: {diff} unidades encontradas.")
-            
-            if st.button("💾 Gravar e Sincronizar Inventário", use_container_width=True, type="primary"):
-                with get_conn() as conn:
-                    conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
-                    data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                    conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, 'Inventário Semanal')", (id_pc, data, diff, f_cont))
-                disparar_sincronizacao()
-                st.toast(f"📋 Auditoria de '{sel_c}' gravada e espelhada com sucesso!", icon="💾")
-                st.rerun()
-
-        # HISTÓRICO DE DIVERGÊNCIAS COM FILTRO POR INSUMO
-        st.divider()
-        st.subheader("📉 Relatório de Ajustes e Perdas do Inventário")
-        
-        prod_lista = ["Todos os Insumos"] + list(df["nome"].unique())
-        prod_aud_sel = st.selectbox("Filtrar auditorias por item específico:", prod_lista)
-        
-        query_hist = """
-            SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', 
-                   (m.saldo_resultante - m.quantidade) as 'Saldo Anterior',
-                   m.saldo_resultante as 'Contagem Física',
-                   m.quantidade as 'Divergência'
-            FROM movimentacoes m 
-            JOIN produtos p ON p.id = m.id_produto
-            WHERE m.tipo = 'Contagem'
-        """
-        if prod_aud_sel != "Todos os Insumos":
-            query_hist += f" AND p.nome = '{prod_aud_sel}'"
-            
-        query_hist += " ORDER BY m.id DESC LIMIT 15"
-        
-        with get_conn() as conn:
-            hist_inv = pd.read_sql(query_hist, conn)
-            
-        if not hist_inv.empty:
-            def cor_divergencia(val):
-                if val < 0: return 'color: #ef4444; font-weight: bold;'
-                if val > 0: return 'color: #10b859; font-weight: bold;'
-                return 'color: #94a3b8;'
-            st.dataframe(hist_inv.style.map(cor_divergencia, subset=['Divergência']), hide_index=True, width='stretch')
-        else:
-            st.info("Nenhum histórico encontrado para o filtro selecionado.")
-
-# IA ANALISTA
-with aba_ia:
-    st.subheader("🧠 Assistente IA de Suprimentos")
-    if st.button("✨ Gerar Diagnóstico Logístico"):
-        df = listar_produtos()
-        if not df.empty:
-            with st.spinner("Analisando dados com contexto de consumo..."):
-                try:
-                    with get_conn() as conn:
-                        cons = pd.read_sql("""
-                            SELECT id_produto, SUM(ABS(quantidade)) as consumo_total 
-                            FROM movimentacoes 
-                            WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) 
-                            GROUP BY id_produto
-                        """, conn)
-                    df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
-                    df['consumo_mensal'] = df['consumo_total'].astype(int)
-
-                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                    mod_name = next((m for m in modelos if 'flash' in m or 'pro' in m), modelos[0])
-                    mod = genai.GenerativeModel(mod_name)
-                    
-                    dados_para_ia = df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)
-                    prompt = f"Analise o estoque logístico (lead_time em DIAS, consumo_mensal real):\n{dados_para_ia}\nEntregue: Resumo de saúde, riscos de ruptura antes do lead time e sugestão de compras."
-                    st.write(mod.generate_content(prompt).text)
-                except Exception as e: st.error(f"Erro IA: {e}")
-
-# HISTÓRICO
-with aba_historico:
-    st.subheader("📜 Histórico de Movimentações")
-    mv = listar_movimentacoes()
-    df_p = listar_produtos()
+if not st.session_state["autenticado"]:
+    st.title("🔒 WMS Inteligente - Controle de Acesso")
+    st.caption("Autenticação obrigatória para acesso à base operacional.")
     
-    if not mv.empty:
-        st.markdown("##### 📈 Gráfico de Auditoria e Evolução de Preços")
-        if not df_p.empty:
-            item_analise = st.selectbox("Selecione o Insumo para ver a Curva de Custos:", list(df_p["nome"].unique()))
-            entradas_item = mv[(mv["produto"] == item_analise) & (mv["tipo"] == "Entrada")].copy()
+    aba_login, aba_cadastro, aba_recuperar = st.tabs(["🔑 Entrar no Sistema", "👤 Criar Conta", "🛠️ Esqueci a Senha"])
+    
+    with aba_login:
+        with st.form("form_login"):
+            usr_input = st.text_input("Usuário (Login)").strip()
+            pass_input = st.text_input("Senha", type="password")
+            btn_login = st.form_submit_button("Acessar WMS")
             
-            if not entradas_item.empty:
-                def extrair_preco(obs):
+            if btn_login:
+                if usr_input and pass_input:
+                    hash_login = gerar_hash_senha(pass_input)
+                    with get_conn() as conn:
+                        res = conn.execute("SELECT aprovado FROM usuarios WHERE usuario = ? AND senha_hash = ?", (usr_input, hash_login)).fetchone()
+                    
+                    if res:
+                        if res[0] == 1:
+                            st.session_state["autenticado"] = True
+                            st.session_state["usuario_atual"] = usr_input
+                            st.toast(f"Bem-vindo de volta, {usr_input}!", icon="👋")
+                            st.rerun()
+                        else:
+                            st.error("⏳ Seu cadastro está pendente de aprovação. Solicite ao administrador a liberação do seu acesso.")
+                    else:
+                        st.error("❌ Usuário ou senha incorretos. Verifique suas credenciais.")
+                else:
+                    st.warning("Preencha todos os campos para fazer o login.")
+                    
+    with aba_cadastro:
+        st.subheader("📝 Solicitar Novo Acesso Operacional")
+        st.info("Nota: Após concluir o envio, seu cadastro ficará retido em uma fila de espera até que o administrador aprove.")
+        with st.form("form_cadastro"):
+            new_usr = st.text_input("Escolha um Nome de Usuário").strip()
+            new_pass = st.text_input("Escolha uma Senha", type="password")
+            pergunta = st.selectbox("Escolha uma pergunta de segurança para recuperação:", [
+                "Qual o nome do seu primeiro animal de estimação?",
+                "Qual a sua cidade natal?",
+                "Qual o nome da sua mãe?",
+                "Qual o nome do seu primeiro colégio?"
+            ])
+            resposta = st.text_input("Resposta da Pergunta de Segurança").strip().lower()
+            btn_cadastrar = st.form_submit_button("Enviar Solicitação de Cadastro")
+            
+            if btn_cadastrar:
+                if new_usr and new_pass and resposta:
+                    status_inicial = 1 if new_usr.lower() == "admin" else 0
                     try:
-                        if "Pago: R$" in str(obs):
-                            return float(str(obs).split("Pago: R$ ")[1].split("/un")[0])
+                        with get_conn() as conn:
+                            conn.execute(
+                                "INSERT INTO usuarios (usuario, senha_hash, pergunta_seguranca, resposta_seguranca_hash, aprovado) VALUES (?, ?, ?, ?, ?)",
+                                (new_usr, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(resposta), status_inicial)
+                            )
+                        disparar_sincronizacao()
+                        if status_inicial == 1:
+                            st.success("👑 Conta de administrador master criada! Vá para a aba Entrar e realize o login.")
+                        else:
+                            st.success(f"⏳ Solicitação enviada! O usuário '{new_usr}' foi colocado na fila de aceitação do Administrador.")
                     except:
-                        pass
-                    return None
+                        st.error("❌ Esse nome de usuário já existe na base. Tente uma combinação diferente.")
+                else:
+                    st.warning("Todos os campos do formulário são obrigatórios.")
+                    
+    with aba_recuperar:
+        st.subheader("== Redefinição de Credencial ==")
+        usr_recup = st.text_input("Digite o usuário que deseja redefinir:").strip()
+        
+        if usr_recup:
+            with get_conn() as conn:
+                dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado FROM usuarios WHERE usuario = ?", (usr_recup,)).fetchone()
+            
+            if dados_usr:
+                st.info(f"Pergunta de Segurança: **{dados_usr[0]}**")
+                resp_recup = st.text_input("Digite a sua resposta secreta:", type="password").strip().lower()
+                nova_senha = st.text_input("Digite a sua Nova Senha:", type="password")
                 
-                entradas_item["Preço de Compra (R$)"] = entradas_item["observacao"].apply(extrair_preco)
-                entradas_item = entradas_item.dropna(subset=["Preço de Compra (R$)"])
+                if st.button("💾 Gravar Nova Senha"):
+                    if resp_recup and nova_senha:
+                        hash_resp = gerar_hash_senha(resp_recup)
+                        with get_conn() as conn:
+                            verif = conn.execute("SELECT usuario FROM usuarios WHERE usuario = ? AND resposta_seguranca_hash = ?", (usr_recup, hash_resp)).fetchone()
+                        
+                        if verif:
+                            with get_conn() as conn:
+                                conn.execute("UPDATE usuarios SET senha_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), usr_recup))
+                            disparar_sincronizacao()
+                            st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+                        else:
+                            st.error("❌ Resposta de segurança incorreta. Tente novamente.")
+                    else:
+                        st.warning("Preencha a resposta e a nova senha.")
+            else:
+                st.error("Usuário não encontrado na base do sistema.")
+
+# ─────────────────────────────────────────────────────────────
+# CONTEÚDO OPERACIONAL DO WMS (RODA APENAS SE AUTENTICADO)
+# ─────────────────────────────────────────────────────────────
+else:
+    with st.sidebar:
+        st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
+        if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
+            st.session_state["autenticado"] = False
+            st.session_state["usuario_atual"] = ""
+            st.rerun()
+
+    df = listar_produtos()
+    
+    # CONSTRUÇÃO DAS ABAS OPERACIONAIS (LINHA CORRIGIDA AQUI)
+    aba_painel, aba_operacao, aba_contagem, aba_ia, aba_historico, aba_gestao = st.tabs([
+        "📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "🧠 IA Analista", "📜 Histórico", "⚙️ Config"
+    ])
+    
+    # PAINEL PRINCIPAL
+    with aba_painel:
+        if not df.empty:
+            df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
+            
+            with get_conn() as conn:
+                cons = pd.read_sql("""
+                    SELECT id_produto, SUM(ABS(quantidade)) as total 
+                    FROM movimentacoes 
+                    WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
+                    GROUP BY id_produto
+                """, conn)
+                
+            df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
+            df['consumo_diario'] = df['total'] / 30
+            
+            mask = df['consumo_diario'] > 0
+            df['Runway'] = 999
+            df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
+            
+            def set_status(row):
+                if row['saldo_atual'] <= 0: return '🔴 Ruptura'
+                if row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
+                if row['Runway'] != 999 and row['Runway'] <= row['lead_time']: return '🟠 Risco'
+                return '🟢 OK'
+            df['Status'] = df.apply(set_status, axis=1)
+            df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
+
+            # CARDS DE MÉTRICAS DINÂMICOS
+            itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
+            if itens_criticos > 0:
+                card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
+            else:
+                card_critico_style = 'background-color: rgba(16, 185, 129, 0.15); border-top: 4px solid #10b859; color: #10b859;'
+
+            c1, c2, c3, c4 = st.columns([1,1,1,1])
+            c1.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
+            c2.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
+            c3.markdown(f'<div class="metric-card" style="{card_critico_style}">Itens Críticos/Ruptura<br><b>{itens_criticos}</b></div>', unsafe_allow_html=True)
+            c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+
+            st.divider()
+            
+            cp1, cp2 = st.columns([1, 1])
+            with cp1:
+                setores = ["Todos"] + list(df["categoria"].unique())
+                setor_sel = st.selectbox("⚡ Filtrar por Setor:", setores)
+            with cp2:
+                busca_nome = st.text_input("🔍 Busca Rápida por Nome do Insumo:")
+            
+            df_filtrado = df.copy()
+            if setor_sel != "Todos":
+                df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
+            if busca_nome.strip():
+                df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
+
+            st.subheader("📋 Posição de Estoque")
+            
+            def destacar_status(val):
+                if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
+                if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
+                if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
+                return ''
+
+            display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'valor_unitario', 'estoque_minimo', 'Runway_Txt']].rename(
+                columns={'categoria':'Setor', 'nome':'Produto', 'valor_unitario': 'Preço Médio', 'Runway_Txt':'Cobertura (Runway)'}
+            )
+            
+            st.dataframe(
+                display_df.style.map(destacar_status, subset=['Status']).format({'Preço Médio': 'R$ {:.2f}'}),
+                hide_index=True, width='stretch'
+            )
+
+            st.divider()
+            st.subheader("📊 Gráficos de Performance e Movimentação")
+            g1, g2 = st.columns(2)
+            df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
+            
+            with g1:
+                st.markdown("##### 📊 Giro Total (Saídas) por Categoria")
+                giro_setor = df.groupby("categoria")["total"].sum().reset_index().rename(columns={"categoria": "Setor", "total": "Movimentações"})
+                if giro_setor["Movimentações"].sum() > 0:
+                    st.bar_chart(data=giro_setor, x="Setor", y="Movimentações", width='stretch')
+                else:
+                    st.info("Ainda não há registros de saídas.")
+                    
+            with g2:
+                st.markdown("##### 🏆 Top 5 Insumos Mais Consumidos (30 dias)")
+                df_consumo_real = df[df["total"] > 0]
+                if not df_consumo_real.empty:
+                    top_consumo = df_consumo_real.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
+                    st.bar_chart(data=top_consumo, x="Insumo", y="Quantidade", width='stretch')
+                else:
+                    st.info("Ainda não há consumo registrado.")
+
+            st.divider()
+            st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
+            df_filtrado["Minimo Ideal"] = (df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
+            df_filtrado["Alvo"] = df_filtrado[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
+            df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
+            
+            apenas_compras = st.checkbox("🛒 Mostrar apenas insumos com necessidade de compra urgente")
+            df_compras = df_filtrado.copy()
+            if apenas_compras:
+                df_compras = df_compras[df_compras["Sugestão Compra"] > 0]
+                
+            st.dataframe(df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, width='stretch')
+
+    # OPERAÇÃO (SAÍDAS E ENTRADAS)
+    with aba_operacao:
+        if not df.empty:
+            col_e, col_s = st.columns(2)
+            with col_e:
+                with st.container(border=True):
+                    st.subheader("⬇️ Registrar Entrada")
+                    ops = dict(zip(df["nome"], df["id"]))
+                    sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
+                    id_pe = ops[sel_e]
+                    p_atual = df.loc[df["id"]==id_pe].iloc[0]
+                    sal_e = int(p_atual["saldo_atual"])
+                    pmp_antigo = float(p_atual["valor_unitario"])
+                    
+                    c1, c2 = st.columns([1, 1])
+                    with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
+                    with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
+                    obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
+                        
+                    if st.button("Confirmar Entrada", type="secondary"):
+                        total_novas_unidades = sal_e + qe
+                        novo_pmp = ((sal_e * pmp_antigo) + (qe * preco_compra)) / total_novas_unidades if total_novas_unidades > 0 else preco_compra
+                        with get_conn() as conn:
+                            conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ?, valor_unitario = ? WHERE id = ?", (qe, novo_pmp, id_pe))
+                            data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
+                            obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
+                            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
+                        disparar_sincronizacao()
+                        st.toast(f"📥 Entrada registrada! Novo PMP: R$ {novo_pmp:.2f}", icon="✅")
+                        st.rerun()
+
+            with col_s:
+                with st.container(border=True):
+                    st.subheader("📤 Registrar Saída")
+                    sel = st.selectbox("Produto ", list(ops.keys()), key="s_p")
+                    id_p = ops[sel]
+                    max_s = int(df.loc[df["id"]==id_p, "saldo_atual"].values[0])
+                    c1, c2 = st.columns([1, 2])
+                    with c1: q = st.number_input("Quantidade", min_value=1, key="s_q")
+                    with c2: obs_s = st.text_input("Observação/Destino", key="s_obs")
+                    
+                    bloquear_saida = q > max_s
+                    if bloquear_saida: st.error(f"❌ Estoque Insuficiente! Saldo na prateleira: {max_s} un.")
+                        
+                    if st.button("Confirmar Saída", type="primary", disabled=bloquear_saida):
+                        with get_conn() as conn:
+                            conn.execute("UPDATE produtos SET saldo_atual = saldo_atual - ? WHERE id = ?", (q, id_p))
+                            data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
+                            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
+                        disparar_sincronizacao()
+                        st.toast(f"📤 Baixa realizada com sucesso!", icon="🚀")
+                        st.rerun()
+
+    # AUDITORIA / CONTAGEM
+    with aba_contagem:
+        st.subheader("📋 Auditoria de Inventário Semanal")
+        if not df.empty:
+            with st.container(border=True):
+                ops = dict(zip(df["nome"], df["id"]))
+                sel_c = st.selectbox("Selecione o Insumo para Contagem", list(ops.keys()), key="c_p")
+                id_pc = ops[sel_c]
+                s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
+                st.metric("Saldo Atual no Sistema", f"{s_sis} un")
+                f_cont = st.number_input("Quantidade Física Contada", min_value=0, step=1, key="c_q")
+                diff = f_cont - s_sis
+                
+                if st.button("💾 Gravar e Sincronizar Inventário", use_container_width=True, type="primary"):
+                    with get_conn() as conn:
+                        conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
+                        data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
+                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, 'Inventário Semanal')", (id_pc, data, diff, f_cont))
+                    disparar_sincronizacao()
+                    st.toast(f"📋 Inventário gravado!", icon="💾")
+                    st.rerun()
+
+            # HISTÓRICO DE DIVERGÊNCIAS
+            st.divider()
+            st.subheader("📉 Relatório de Ajustes e Perdas do Inventário")
+            prod_lista = ["Todos os Insumos"] + list(df["nome"].unique())
+            prod_aud_sel = st.selectbox("Filtrar auditorias por item específico:", prod_lista)
+            
+            query_hist = """
+                SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', 
+                       (m.saldo_resultante - m.quantidade) as 'Saldo Anterior',
+                       m.saldo_resultante as 'Contagem Física',
+                       m.quantidade as 'Divergência'
+                FROM movimentacoes m 
+                JOIN produtos p ON p.id = m.id_produto
+                WHERE m.tipo = 'Contagem'
+            """
+            if prod_aud_sel != "Todos os Insumos":
+                query_hist += f" AND p.nome = '{prod_aud_sel}'"
+            query_hist += " ORDER BY m.id DESC LIMIT 15"
+            
+            with get_conn() as conn:
+                hist_inv = pd.read_sql(query_hist, conn)
+            if not hist_inv.empty:
+                def cor_divergencia(val):
+                    if val < 0: return 'color: #ef4444; font-weight: bold;'
+                    if val > 0: return 'color: #10b859; font-weight: bold;'
+                    return 'color: #94a3b8;'
+                st.dataframe(hist_inv.style.map(cor_divergencia, subset=['Divergência']), hide_index=True, width='stretch')
+
+    # IA ANALISTA
+    with aba_ia:
+        st.subheader("🧠 Assistente IA de Suprimentos")
+        if st.button("✨ Gerar Diagnóstico Logístico"):
+            if not df.empty:
+                with st.spinner("Analisando dados..."):
+                    try:
+                        with get_conn() as conn:
+                            cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
+                        cons_dict = dict(cons)
+                        df['consumo_mensal'] = df['id'].map(cons_dict).fillna(0).astype(int)
+                        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                        mod = genai.GenerativeModel('gemini-pro')
+                        prompt = f"Analise o estoque logístico:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)}"
+                        st.write(mod.generate_content(prompt).text)
+                    except Exception as e: st.error(f"Erro IA: {e}")
+
+    # HISTÓRICO
+    with aba_historico:
+        st.subheader("📜 Histórico de Movimentações")
+        mv = listar_movimentacoes()
+        if not mv.empty:
+            st.markdown("##### 📈 Gráfico de Auditoria e Evolução de Preços")
+            if not df.empty:
+                item_analise = st.selectbox("Selecione o Insumo para ver a Curva de Custos:", list(df["nome"].unique()))
+                entradas_item = mv[(mv["produto"] == item_analise) & (mv["tipo"] == "Entrada")].copy()
                 
                 if not entradas_item.empty:
-                    entradas_item = entradas_item.iloc[::-1]
-                    st.line_chart(data=entradas_item, x="data_hora", y="Preço de Compra (R$)", width='stretch')
-                else:
-                    st.info("Este item possui entradas registradas, mas nenhuma com o novo sistema de preços médios ponderados.")
-            else:
-                st.info("Ainda não existem registros de 'Entrada' para este produto para gerar a linha do tempo.")
-        
-        st.divider()
-        st.markdown("##### 📋 Histórico Geral das Movimentações")
-        
-        mv['Mês/Ano'] = mv['data_hora'].apply(lambda x: x.split()[0][3:])
-        meses_disponiveis = sorted(mv['Mês/Ano'].unique(), reverse=True)
-        
-        c_filt, _ = st.columns([2, 6])
-        with c_filt:
-            mes_selecionado = st.selectbox("Filtrar Histórico por Período:", meses_disponiveis)
-        
-        mv_filtrado = mv[mv['Mês/Ano'] == mes_selecionado].drop(columns=['Mês/Ano'])
-        st.dataframe(mv_filtrado, use_container_width=True, hide_index=True)
-        st.download_button("📥 Baixar Dados do Mês (CSV)", mv_filtrado.to_csv(index=False).encode('utf-8-sig'), f"historico_{mes_selecionado.replace('/', '_')}.csv")
-    else:
-        st.info("Nenhuma movimentação registrada.")
-
-# GESTÃO DE PRODUTOS
-with aba_gestao:
-    a1, a2, a3 = st.tabs(["➕ Novo", "✏️ Editar", "🗑️ Excluir"])
-    
-    with a1:
-        with st.form("new_p"):
-            n = st.text_input("Nome do Insumo")
-            c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
-            m = st.number_input("Mínimo", value=10)
-            l = st.number_input("Lead Time (Dias)", value=3)
-            v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
-            if st.form_submit_button("Cadastrar"):
-                if n.strip():
-                    cadastrar_produto(n.strip(), m, v, c, l)
-                    disparar_sincronizacao()
-                    st.toast(f"➕ Produto '{n.strip()}' cadastrado com sucesso!", icon="✨")
-                    st.success(f"Sucesso: Novo insumo cadastrado na base.")
-                    st.rerun()
-                
-    with a2:
-        df = listar_produtos()
-        if not df.empty:
-            op_e = dict(zip(df["nome"], df["id"]))
-            s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
-            id_e = op_e[s_e]
-            p_at = df[df["id"]==id_e].iloc[0]
-            with st.form("edit_p"):
-                en = st.text_input("Nome", value=p_at["nome"])
-                ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"], index=0)
-                em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
-                el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
-                ev = st.number_input("Preço Médio Atual (R$)", value=float(p_at["valor_unitario"]))
-                if st.form_submit_button("Atualizar"):
-                    editar_produto(id_e, en, em, ev, ec, el)
-                    disparar_sincronizacao()
-                    st.toast(f"✏️ Configurações de '{en}' atualizadas com sucesso!", icon="⚙️")
-                    st.success(f"Sucesso: Dados atualizados.")
-                    st.rerun()
+                    def extrair_preco(obs):
+                        try:
+                            if "Pago: R$" in str(obs):
+                                return float(str(obs).split("Pago: R$ ")[1].split("/un")[0])
+                        except: pass
+                        return None
                     
-    with a3:
-        st.subheader("🗑️ Eliminar Insumo da Base")
-        df = listar_produtos()
-        if not df.empty:
-            op_d = dict(zip(df["nome"], df["id"]))
-            s_d = st.selectbox("Selecione o Insumo para Excluir", list(op_d.keys()), key="del_select")
-            id_d = op_d[s_d]
+                    entradas_item["Preço de Compra (R$)"] = entradas_item["observacao"].apply(extrair_preco)
+                    entradas_item = entradas_item.dropna(subset=["Preço de Compra (R$)"]).iloc[::-1]
+                    if not entradas_item.empty: st.line_chart(data=entradas_item, x="data_hora", y="Preço de Compra (R$)", width='stretch')
+                else:
+                    st.info("Ainda não existem entradas registradas para este produto.")
             
-            st.warning(f"⚠️ **Aviso de Integridade:** Eliminar o item '{s_d}' irá apagar permanentemente o seu registo do cadastro e **destruirá todo o histórico de movimentações** associado. Esta ação não pode ser desfeita.")
-            confirmar_exclusao = st.checkbox("Confirmo que verifiquei os dados e pretendo apagar este insumo e o seu histórico definitivamente.", key="del_check")
+            st.divider()
+            st.markdown("##### 📋 Histórico Geral das Movimentações")
+            mv['Mês/Ano'] = mv['data_hora'].apply(lambda x: x.split()[0][3:])
+            mes_selecionado = st.selectbox("Filtrar por Período:", sorted(mv['Mês/Ano'].unique(), reverse=True))
+            st.dataframe(mv[mv['Mês/Ano'] == mes_selecionado].drop(columns=['Mês/Ano']), use_container_width=True, hide_index=True)
+
+    # GESTÃO E PAINEL DE APROVAÇÕES EXCLUSIVO DE ADMINISTRADOR
+    with aba_gestao:
+        if st.session_state["usuario_atual"].lower() == "admin":
+            st.markdown("### 👑 Painel de Aprovações de Novos Operadores")
+            with get_conn() as conn:
+                pendentes = pd.read_sql("SELECT usuario, pergunta_seguranca FROM usuarios WHERE aprovado = 0", conn)
             
-            if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar_exclusao, key="del_btn"):
-                try:
-                    deletar_produto(id_d)
-                    disparar_sincronizacao()
-                    st.toast(f"🗑️ Item '{s_d}' foi completamente deletado do cadastro.", icon="🗑️")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao deletar produto: {e}")
-        else:
-            st.info("Nenhum produto cadastrado para exclusão.")
+            if not pendentes.empty:
+                st.dataframe(pendentes, use_container_width=True, hide_index=True)
+                col_sel, col_act = st.columns([3, 2])
+                with col_sel:
+                    usr_alvo = st.selectbox("Selecione o usuário para gerenciar:", list(pendentes["usuario"]))
+                with col_act:
+                    c_ap, c_rec = st.columns(2)
+                    with c_ap:
+                        if st.button("✅ Aprovar", use_container_width=True):
+                            with get_conn() as conn:
+                                conn.execute("UPDATE usuarios SET aprovado = 1 WHERE usuario = ?", (usr_alvo,))
+                            disparar_sincronizacao()
+                            st.success(f"O operador '{usr_alvo}' agora possui acesso liberado ao WMS!")
+                            st.rerun()
+                    with c_rec:
+                        if st.button("❌ Recusar", use_container_width=True):
+                            with get_conn() as conn:
+                                conn.execute("DELETE FROM usuarios WHERE usuario = ?", (usr_alvo,))
+                            disparar_sincronizacao()
+                            st.warning(f"A solicitação de '{usr_alvo}' foi excluída.")
+                            st.rerun()
+            else:
+                st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
+            st.divider()
+
+        a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
+        with a1:
+            with st.form("new_p"):
+                n = st.text_input("Nome do Insumo")
+                c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                m = st.number_input("Mínimo", value=10)
+                l = st.number_input("Lead Time (Dias)", value=3)
+                v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
+                if st.form_submit_button("Cadastrar"):
+                    if n.strip():
+                        cadastrar_produto(n.strip(), m, v, c, l)
+                        disparar_sincronizacao()
+                        st.toast(f"➕ Cadastrado!", icon="✨")
+                        st.rerun()
+                    
+        with a2:
+            if not df.empty:
+                op_e = dict(zip(df["nome"], df["id"]))
+                s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
+                id_e = op_e[s_e]
+                p_at = df[df["id"]==id_e].iloc[0]
+                with st.form("edit_p"):
+                    en = st.text_input("Nome", value=p_at["nome"])
+                    ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                    em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
+                    el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
+                    ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
+                    if st.form_submit_button("Atualizar"):
+                        editar_produto(id_e, en, em, ev, ec, el)
+                        disparar_sincronizacao()
+                        st.toast(f"✏️ Atualizado!", icon="⚙️")
+                        st.rerun()
+                        
+        with a3:
+            if not df.empty:
+                op_d = dict(zip(df["nome"], df["id"]))
+                s_d = st.selectbox("Selecione para Excluir", list(op_d.keys()))
+                id_d = op_d[s_d]
+                confirmar = st.checkbox("Confirmo que pretendo apagar este insumo e destruir seu histórico.")
+                if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar):
+                    try:
+                        deletar_produto(id_d)
+                        disparar_sincronizacao()
+                        st.toast(f"🗑️ Removido!", icon="🗑️")
+                        st.rerun()
+                    except Exception as e: st.error(f"Erro: {e}")
