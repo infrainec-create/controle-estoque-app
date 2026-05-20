@@ -213,21 +213,27 @@ with aba_painel:
 
         st.divider()
         
-        # MELLHORIA 4: FILTRO POR SETOR NO TOPO DO PAINEL
-        setores = ["Todos"] + list(df["categoria"].unique())
-        setor_sel = st.selectbox("🔍 Filtrar Posição por Setor/Categoria:", setores)
+        # FILTROS AVANÇADOS DE PESQUISA E SETOR (CORRIGIDO)
+        cp1, cp2 = st.columns([1, 1])
+        with cp1:
+            setores = ["Todos"] + list(df["categoria"].unique())
+            setor_sel = st.selectbox("⚡ Filtrar por Setor:", setores)
+        with cp2:
+            busca_nome = st.text_input("🔍 Busca Rápida por Nome do Insumo:")
         
         df_filtrado = df.copy()
         if setor_sel != "Todos":
             df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
+        if busca_nome.strip():
+            df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
 
         st.subheader("📋 Posição de Estoque")
         
-        # MELLHORIA 3: FORMATAÇÃO CONDICIONAL POR CORES NA TABELA
+        # FORMATAÇÃO CONDICIONAL POR CORES NA TABELA (TEXTO PRETO E EM NEGRITO)
         def destacar_status(val):
-            if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.2); color: #f8fafc;'
-            if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.2); color: #f8fafc;'
-            if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.2); color: #f8fafc;'
+            if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
+            if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
+            if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
             return ''
 
         display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'Runway_Txt']].rename(
@@ -241,10 +247,17 @@ with aba_painel:
 
         st.divider()
         st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
+        
         df_filtrado["Minimo Ideal"] = (df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
         df_filtrado["Alvo"] = df_filtrado[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
         df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
-        st.dataframe(df_filtrado[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, use_container_width=True)
+        
+        apenas_compras = st.checkbox("🛒 Mostrar apenas insumos com necessidade de compra urgente")
+        df_compras = df_filtrado.copy()
+        if apenas_compras:
+            df_compras = df_compras[df_compras["Sugestão Compra"] > 0]
+            
+        st.dataframe(df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}), hide_index=True, use_container_width=True)
 
 # OPERAÇÃO (SAÍDAS E ENTRADAS COM INVERSÃO E OBSERVAÇÕES)
 with aba_operacao:
@@ -270,7 +283,6 @@ with aba_operacao:
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                         conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
                     disparar_sincronizacao()
-                    # CONFIRMAÇÃO VISUAL ADICIONADA
                     st.toast(f"📥 Entrada de {qe} un. de '{sel_e}' registrada com sucesso!", icon="✅")
                     st.success(f"Entrada Confirmada: {sel_e} (+{qe})")
                     st.rerun()
@@ -286,7 +298,6 @@ with aba_operacao:
                 with c1: q = st.number_input("Quantidade", min_value=1, key="s_q")
                 with c2: obs_s = st.text_input("Observação/Destino", key="s_obs")
                 
-                # MELHORIA 2: BLOQUEIO DE SEGURANÇA PARA ESTOQUE NEGATIVO
                 if q > max_s:
                     st.error(f"❌ Estoque Insuficiente! Saldo atual na prateleira é de apenas {max_s} un.")
                     bloquear_saida = True
@@ -299,7 +310,6 @@ with aba_operacao:
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                         conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
                     disparar_sincronizacao()
-                    # CONFIRMAÇÃO VISUAL ADICIONADA
                     st.toast(f"📤 Baixa de {q} un. de '{sel}' realizada com sucesso!", icon="🚀")
                     st.success(f"Saída Confirmada: {sel} (-{q})")
                     st.rerun()
@@ -307,7 +317,7 @@ with aba_operacao:
 # ABA EXCLUSIVA: INVENTÁRIO / CONTAGEM
 with aba_contagem:
     st.subheader("📋 Auditoria de Inventário Semanal")
-    st.info("Aba dedicada para auditoria física. O consumo da operação é calculado através destas contagens.")
+    st.info("Aba dedicada para auditoria física. O consumo da operação é calculated através destas contagens.")
     df = listar_produtos()
     if not df.empty:
         with st.container(border=True):
@@ -330,24 +340,34 @@ with aba_contagem:
                     data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                     conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, 'Inventário Semanal')", (id_pc, data, diff, f_cont))
                 disparar_sincronizacao()
-                # CONFIRMAÇÃO VISUAL ADICIONADA
                 st.toast(f"📋 Auditoria de '{sel_c}' gravada e espelhada com sucesso!", icon="💾")
                 st.rerun()
 
-        # MELHORIA 1: HISTÓRICO DE DIVERGÊNCIAS DETECTADAS NO INVENTÁRIO
+        # HISTÓRICO DE DIVERGÊNCIAS COM FILTRO POR INSUMO
         st.divider()
-        st.subheader("📉 Relatório de Ajustes e Perdas Recentes")
+        st.subheader("📉 Relatório de Ajustes e Perdas do Inventário")
+        
+        prod_lista = ["Todos os Insumos"] + list(df["nome"].unique())
+        prod_aud_sel = st.selectbox("Filtrar auditorias por item específico:", prod_lista)
+        
+        query_hist = """
+            SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', 
+                   (m.saldo_resultante - m.quantidade) as 'Saldo Anterior',
+                   m.saldo_resultante as 'Contagem Física',
+                   m.quantidade as 'Divergência'
+            FROM movimentacoes m 
+            JOIN produtos p ON p.id = m.id_produto
+            WHERE m.tipo = 'Contagem'
+        """
+        
+        if prod_aud_sel != "Todos os Insumos":
+            query_hist += f" AND p.nome = '{prod_aud_sel}'"
+            
+        query_hist += " ORDER BY m.id DESC LIMIT 15"
+        
         with get_conn() as conn:
-            hist_inv = pd.read_sql("""
-                SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', 
-                       (m.saldo_resultante - m.quantidade) as 'Saldo Anterior',
-                       m.saldo_resultante as 'Contagem Física',
-                       m.quantidade as 'Divergência'
-                FROM movimentacoes m 
-                JOIN produtos p ON p.id = m.id_produto
-                WHERE m.tipo = 'Contagem'
-                ORDER BY m.id DESC LIMIT 10
-            """, conn)
+            hist_inv = pd.read_sql(query_hist, conn)
+            
         if not hist_inv.empty:
             def cor_divergencia(val):
                 if val < 0: return 'color: #ef4444; font-weight: bold;'
@@ -355,7 +375,7 @@ with aba_contagem:
                 return 'color: #94a3b8;'
             st.dataframe(hist_inv.style.map(cor_divergencia, subset=['Divergência']), hide_index=True, use_container_width=True)
         else:
-            st.info("Nenhuma auditoria de inventário registrada até o momento.")
+            st.info("Nenhum histórico encontrado para o filtro selecionado.")
 
 # IA ANALISTA
 with aba_ia:
@@ -403,7 +423,7 @@ with aba_historico:
     else:
         st.info("Nenhuma movimentação registrada.")
 
-# GESTÃO DE PRODUTOS (CADASTRAR / EDITAR / EXCLUIR SEGURA EM 2 ETAPAS)
+# GESTÃO DE PRODUTOS
 with aba_gestao:
     a1, a2, a3 = st.tabs(["➕ Novo", "✏️ Editar", "🗑️ Excluir"])
     
@@ -418,7 +438,6 @@ with aba_gestao:
                 if n.strip():
                     cadastrar_produto(n.strip(), m, v, c, l)
                     disparar_sincronizacao()
-                    # CONFIRMAÇÃO VISUAL ADICIONADA
                     st.toast(f"➕ Produto '{n.strip()}' cadastrado com sucesso!", icon="✨")
                     st.success(f"Sucesso: Novo insumo cadastrado na base.")
                     st.rerun()
@@ -439,8 +458,7 @@ with aba_gestao:
                 if st.form_submit_button("Atualizar"):
                     editar_produto(id_e, en, em, ev, ec, el)
                     disparar_sincronizacao()
-                    # CONFIRMAÇÃO VISUAL ADICIONADA
-                    st.toast(f"✏️ Configurações de '{en}' atualizadas com sucesso!", icon="⚙️")
+                    st.toast(f"✏️ Configurações de '{en}' updated com sucesso!", icon="⚙️")
                     st.success(f"Sucesso: Dados atualizados.")
                     st.rerun()
                     
@@ -458,8 +476,7 @@ with aba_gestao:
             if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar_exclusao, key="del_btn"):
                 deletar_produto(id_d)
                 disparar_sincronizacao()
-                # CONFIRMAÇÃO VISUAL ADICIONADA
-                st.toast(f"🗑️ Item '{s_d}' foi completamente deletado do cadastro.", icon="💥")
+                st.toast(f"🗑️ Item '{s_d}' foi completamente deletado do cadastro.", icon="🗑️")
                 st.rerun()
         else:
             st.info("Nenhum produto cadastrado para exclusão.")
