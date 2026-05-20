@@ -203,10 +203,8 @@ with aba_painel:
         df['Status'] = df.apply(set_status, axis=1)
         df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-        # MELHORIA 1: CARDS DE MÉTRICAS DINÂMICOS E INTELIGENTES (CORES DE ALERTA)
+        # CARDS DE MÉTRICAS DINÂMICOS
         itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
-        
-        # Define a cor do card de críticos dinamicamente
         if itens_criticos > 0:
             card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
         else:
@@ -236,7 +234,6 @@ with aba_painel:
 
         st.subheader("📋 Posição de Estoque")
         
-        # FORMATAÇÃO CONDICIONAL POR CORES NA TABELA (TEXTO PRETO CORRIGIDO)
         def destacar_status(val):
             if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
             if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
@@ -252,12 +249,11 @@ with aba_painel:
             hide_index=True, use_container_width=True
         )
 
-      # MELHORIA 3: GRÁFICOS NATIVOS DE CONSUMO (MINI BI INTEGRADO COM TRATAMENTO DE ERROS)
+        # GRÁFICOS NATIVOS DE CONSUMO
         st.divider()
         st.subheader("📊 Gráficos de Performance e Movimentação")
         g1, g2 = st.columns(2)
         
-        # Garante que a coluna 'total' exista, seja numérica e não tenha valores nulos
         df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
         
         with g1:
@@ -270,14 +266,12 @@ with aba_painel:
                 
         with g2:
             st.markdown("##### 🏆 Top 5 Insumos Mais Consumidos (30 dias)")
-            # Filtra apenas quem tem consumo real maior que zero antes de puxar os maiores
             df_consumo_real = df[df["total"] > 0]
-            
             if not df_consumo_real.empty:
                 top_consumo = df_consumo_real.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
                 st.bar_chart(data=top_consumo, x="Insumo", y="Quantidade", use_container_width=True)
             else:
-                st.info("Ainda não há consumo registrado para listar o ranking.") 
+                st.info("Ainda não há consumo registrado para listar o ranking.")
 
         st.divider()
         st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
@@ -451,11 +445,46 @@ with aba_ia:
                     st.write(mod.generate_content(prompt).text)
                 except Exception as e: st.error(f"Erro IA: {e}")
 
-# HISTÓRICO
+# HISTÓRICO (MELHORIA 1: GRÁFICO DE EVOLUÇÃO DE PREÇOS INTEGRADO)
 with aba_historico:
     st.subheader("📜 Histórico de Movimentações")
     mv = listar_movimentacoes()
+    df_p = listar_produtos()
+    
     if not mv.empty:
+        # Bloco de análise de custos por item específico
+        st.markdown("##### 📈 Gráfico de Auditoria e Evolução de Preços")
+        if not df_p.empty:
+            item_analise = st.selectbox("Selecione o Insumo para ver a Curva de Custos:", list(df_p["nome"].unique()))
+            
+            # Filtra as entradas do produto e limpa a string para pegar o valor decimal real pago
+            entradas_item = mv[(mv["produto"] == item_analise) & (mv["tipo"] == "Entrada")].copy()
+            
+            if not entradas_item.empty:
+                # Extrai o valor pago de dentro da string de observação (ex: "Pago: R$ 5.20/un")
+                def extrair_preco(obs):
+                    try:
+                        if "Pago: R$" in str(obs):
+                            return float(str(obs).split("Pago: R$ ")[1].split("/un")[0])
+                    except:
+                        pass
+                    return None
+                
+                entradas_item["Preço de Compra (R$)"] = entradas_item["observacao"].apply(extrair_preco)
+                entradas_item = entradas_item.dropna(subset=["Preço de Compra (R$)"])
+                
+                if not entradas_item.empty:
+                    # Inverte a ordem para ficar cronológica (da mais antiga para a mais nova)
+                    entradas_item = entradas_item.iloc[::-1]
+                    st.line_chart(data=entradas_item, x="data_hora", y="Preço de Compra (R$)", use_container_width=True)
+                else:
+                    st.info("Este item possui entradas registradas, mas nenhuma com o novo sistema de preços médios ponderados.")
+            else:
+                st.info("Ainda não existem registros de 'Entrada' para este produto para gerar a linha do tempo.")
+        
+        st.divider()
+        st.markdown("##### 📋 Histórico Geral das Movimentações")
+        
         mv['Mês/Ano'] = mv['data_hora'].apply(lambda x: x.split()[0][3:])
         meses_disponiveis = sorted(mv['Mês/Ano'].unique(), reverse=True)
         
@@ -505,7 +534,7 @@ with aba_gestao:
                     editar_produto(id_e, en, em, ev, ec, el)
                     disparar_sincronizacao()
                     st.toast(f"✏️ Configurações de '{en}' atualizadas com sucesso!", icon="⚙️")
-                    st.success(f"Sucesso: Dados updated.")
+                    st.success(f"Sucesso: Dados atualizados.")
                     st.rerun()
                     
     with a3:
@@ -525,4 +554,4 @@ with aba_gestao:
                 st.toast(f"🗑️ Item '{s_d}' foi completamente deletado do cadastro.", icon="🗑️")
                 st.rerun()
         else:
-            st.info("Nenhum produto cadastrado para exclusão.")
+            st.info("Nenum produto cadastrado para exclusão.")
