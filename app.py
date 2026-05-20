@@ -27,11 +27,10 @@ st.markdown("""
         width: 100%;
         margin-top: 10px;
     }
-    /* Cartões de métricas transparentes para herdar o tema */
+    /* Base dos cartões de métricas */
     .metric-card {
         padding: 20px;
         border-radius: 12px;
-        border-top: 4px solid #0052cc;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 15px;
     }
@@ -204,12 +203,20 @@ with aba_painel:
         df['Status'] = df.apply(set_status, axis=1)
         df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-        # Layout Métricas
+        # MELHORIA 1: CARDS DE MÉTRICAS DINÂMICOS E INTELIGENTES (CORES DE ALERTA)
+        itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
+        
+        # Define a cor do card de críticos dinamicamente
+        if itens_criticos > 0:
+            card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
+        else:
+            card_critico_style = 'background-color: rgba(16, 185, 129, 0.15); border-top: 4px solid #10b859; color: #10b859;'
+
         c1, c2, c3, c4 = st.columns([1,1,1,1])
-        c1.markdown(f'<div class="metric-card">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-card">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-card">Itens Críticos<br><b>{(df["saldo_atual"] < df["estoque_minimo"]).sum()}</b></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="metric-card">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+        c1.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-card" style="{card_critico_style}">Itens Críticos/Ruptura<br><b>{itens_criticos}</b></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
 
         st.divider()
         
@@ -229,7 +236,7 @@ with aba_painel:
 
         st.subheader("📋 Posição de Estoque")
         
-        # FORMATAÇÃO CONDICIONAL POR CORES NA TABELA (TEXTO PRETO E EM NEGRITO)
+        # FORMATAÇÃO CONDICIONAL POR CORES NA TABELA (TEXTO PRETO CORRIGIDO)
         def destacar_status(val):
             if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
             if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
@@ -244,6 +251,27 @@ with aba_painel:
             display_df.style.map(destacar_status, subset=['Status']).format({'Preço Médio': 'R$ {:.2f}'}),
             hide_index=True, use_container_width=True
         )
+
+        # MELHORIA 3: GRÁFICOS NATIVOS DE CONSUMO (MINI BI INTEGRADO)
+        st.divider()
+        st.subheader("📊 Gráficos de Performance e Movimentação")
+        g1, g2 = st.columns(2)
+        
+        with g1:
+            st.markdown("##### 🍕 Giro Total (Saídas) por Categoria")
+            giro_setor = df.groupby("categoria")["total"].sum().reset_index()
+            if giro_setor["total"].sum() > 0:
+                st.pie_chart(data=giro_setor, names="categoria", values="total", use_container_width=True)
+            else:
+                st.info("Ainda não há registros de saídas para gerar o gráfico de setores.")
+                
+        with g2:
+            st.markdown("##### 🏆 Top 5 Insumos Mais Consumidos (30 dias)")
+            top_consumo = df.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
+            if top_consumo["Quantidade"].sum() > 0:
+                st.bar_chart(data=top_consumo, x="Insumo", y="Quantidade", use_container_width=True)
+            else:
+                st.info("Ainda não há consumo registrado para listar o ranking.")
 
         st.divider()
         st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
@@ -272,20 +300,17 @@ with aba_operacao:
                 sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
                 id_pe = ops[sel_e]
                 
-                # Puxa informações atuais do item para o cálculo do PMP
                 p_atual = df.loc[df["id"]==id_pe].iloc[0]
                 sal_e = int(p_atual["saldo_atual"])
                 pmp_antigo = float(p_atual["valor_unitario"])
                 
                 c1, c2 = st.columns([1, 1])
                 with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
-                # MELHORIA 3: ENTRADA DE PREÇO UNITÁRIO DE COMPRA
                 with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
                 
                 obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
                     
                 if st.button("Confirmar Entrada", type="secondary"):
-                    # Cálculo Seguro do Preço Médio Ponderado (PMP)
                     total_novas_unidades = sal_e + qe
                     if total_novas_unidades > 0:
                         novo_pmp = ((sal_e * pmp_antigo) + (qe * preco_compra)) / total_novas_unidades
@@ -293,10 +318,8 @@ with aba_operacao:
                         novo_pmp = preco_compra
                         
                     with get_conn() as conn:
-                        # Atualiza Saldo e o Preço Médio na tabela de produtos
                         conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ?, valor_unitario = ? WHERE id = ?", (qe, novo_pmp, id_pe))
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        # Grava o custo pago nesta nota na observação do histórico para auditoria
                         obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
                         conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
                     
@@ -476,7 +499,7 @@ with aba_gestao:
                     editar_produto(id_e, en, em, ev, ec, el)
                     disparar_sincronizacao()
                     st.toast(f"✏️ Configurações de '{en}' atualizadas com sucesso!", icon="⚙️")
-                    st.success(f"Sucesso: Dados atualizados.")
+                    st.success(f"Sucesso: Dados updated.")
                     st.rerun()
                     
     with a3:
