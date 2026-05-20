@@ -213,7 +213,7 @@ with aba_painel:
 
         st.divider()
         
-        # FILTROS AVANÇADOS DE PESQUISA E SETOR (CORRIGIDO)
+        # FILTROS AVANÇADOS DE PESQUISA E SETOR
         cp1, cp2 = st.columns([1, 1])
         with cp1:
             setores = ["Todos"] + list(df["categoria"].unique())
@@ -236,12 +236,12 @@ with aba_painel:
             if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
             return ''
 
-        display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'Runway_Txt']].rename(
-            columns={'categoria':'Setor', 'nome':'Produto', 'Runway_Txt':'Cobertura (Runway)'}
+        display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'valor_unitario', 'estoque_minimo', 'Runway_Txt']].rename(
+            columns={'categoria':'Setor', 'nome':'Produto', 'valor_unitario': 'Preço Médio', 'Runway_Txt':'Cobertura (Runway)'}
         )
         
         st.dataframe(
-            display_df.style.map(destacar_status, subset=['Status']),
+            display_df.style.map(destacar_status, subset=['Status']).format({'Preço Médio': 'R$ {:.2f}'}),
             hide_index=True, use_container_width=True
         )
 
@@ -271,19 +271,37 @@ with aba_operacao:
                 ops = dict(zip(df["nome"], df["id"]))
                 sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
                 id_pe = ops[sel_e]
-                sal_e = int(df.loc[df["id"]==id_pe, "saldo_atual"].values[0])
                 
-                c1, c2 = st.columns([1, 2])
+                # Puxa informações atuais do item para o cálculo do PMP
+                p_atual = df.loc[df["id"]==id_pe].iloc[0]
+                sal_e = int(p_atual["saldo_atual"])
+                pmp_antigo = float(p_atual["valor_unitario"])
+                
+                c1, c2 = st.columns([1, 1])
                 with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
-                with c2: obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
+                # MELHORIA 3: ENTRADA DE PREÇO UNITÁRIO DE COMPRA
+                with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
+                
+                obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
                     
                 if st.button("Confirmar Entrada", type="secondary"):
+                    # Cálculo Seguro do Preço Médio Ponderado (PMP)
+                    total_novas_unidades = sal_e + qe
+                    if total_novas_unidades > 0:
+                        novo_pmp = ((sal_e * pmp_antigo) + (qe * preco_compra)) / total_novas_unidades
+                    else:
+                        novo_pmp = preco_compra
+                        
                     with get_conn() as conn:
-                        conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ? WHERE id = ?", (qe, id_pe))
+                        # Atualiza Saldo e o Preço Médio na tabela de produtos
+                        conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ?, valor_unitario = ? WHERE id = ?", (qe, novo_pmp, id_pe))
                         data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, sal_e + qe, obs_e))
+                        # Grava o custo pago nesta nota na observação do histórico para auditoria
+                        obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
+                        conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
+                    
                     disparar_sincronizacao()
-                    st.toast(f"📥 Entrada de {qe} un. de '{sel_e}' registrada com sucesso!", icon="✅")
+                    st.toast(f"📥 Entrada registrada! Novo preço médio de '{sel_e}': R$ {novo_pmp:.2f}", icon="✅")
                     st.success(f"Entrada Confirmada: {sel_e} (+{qe})")
                     st.rerun()
 
@@ -359,7 +377,6 @@ with aba_contagem:
             JOIN produtos p ON p.id = m.id_produto
             WHERE m.tipo = 'Contagem'
         """
-        
         if prod_aud_sel != "Todos os Insumos":
             query_hist += f" AND p.nome = '{prod_aud_sel}'"
             
@@ -433,7 +450,7 @@ with aba_gestao:
             c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
             m = st.number_input("Mínimo", value=10)
             l = st.number_input("Lead Time (Dias)", value=3)
-            v = st.number_input("Valor Un.", value=0.0)
+            v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
             if st.form_submit_button("Cadastrar"):
                 if n.strip():
                     cadastrar_produto(n.strip(), m, v, c, l)
@@ -454,11 +471,11 @@ with aba_gestao:
                 ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"], index=0)
                 em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
                 el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
-                ev = st.number_input("Valor Un.", value=float(p_at["valor_unitario"]))
+                ev = st.number_input("Preço Médio Atual (R$)", value=float(p_at["valor_unitario"]))
                 if st.form_submit_button("Atualizar"):
                     editar_produto(id_e, en, em, ev, ec, el)
                     disparar_sincronizacao()
-                    st.toast(f"✏️ Configurações de '{en}' updated com sucesso!", icon="⚙️")
+                    st.toast(f"✏️ Configurações de '{en}' atualizadas com sucesso!", icon="⚙️")
                     st.success(f"Sucesso: Dados atualizados.")
                     st.rerun()
                     
