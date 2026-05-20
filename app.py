@@ -252,10 +252,13 @@ with aba_painel:
             hide_index=True, use_container_width=True
         )
 
-        # MELHORIA 3: GRÁFICOS NATIVOS DE CONSUMO (MINI BI INTEGRADO)
+      # MELHORIA 3: GRÁFICOS NATIVOS DE CONSUMO (MINI BI INTEGRADO COM TRATAMENTO DE ERROS)
         st.divider()
         st.subheader("📊 Gráficos de Performance e Movimentação")
         g1, g2 = st.columns(2)
+        
+        # Garante que a coluna 'total' exista, seja numérica e não tenha valores nulos
+        df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
         
         with g1:
             st.markdown("##### 🍕 Giro Total (Saídas) por Categoria")
@@ -267,11 +270,14 @@ with aba_painel:
                 
         with g2:
             st.markdown("##### 🏆 Top 5 Insumos Mais Consumidos (30 dias)")
-            top_consumo = df.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
-            if top_consumo["Quantidade"].sum() > 0:
+            # Filtra apenas quem tem consumo real maior que zero antes de puxar os maiores
+            df_consumo_real = df[df["total"] > 0]
+            
+            if not df_consumo_real.empty:
+                top_consumo = df_consumo_real.nlargest(5, "total")[["nome", "total"]].rename(columns={"nome": "Insumo", "total": "Quantidade"})
                 st.bar_chart(data=top_consumo, x="Insumo", y="Quantidade", use_container_width=True)
             else:
-                st.info("Ainda não há consumo registrado para listar o ranking.")
+                st.info("Ainda não há consumo registrado para listar o ranking.") 
 
         st.divider()
         st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
