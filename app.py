@@ -188,7 +188,6 @@ def deletar_produto(id_produto):
 # INICIALIZAÇÃO E CONTROLE DE SESSÃO COM TRAVA DE DOWNLOAD
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
-    # A TRAVA ESTÁ AQUI: Só baixa do Drive se o arquivo não existir fisicamente!
     if not os.path.exists(DB_PATH):
         descarregar_do_drive()
     init_db()
@@ -650,6 +649,36 @@ else:
             else:
                 st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
             st.divider()
+
+            # --- NOVO PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
+            st.markdown("### 👥 Gerenciamento de Usuários Ativos")
+            with get_conn() as conn:
+                ativos = pd.read_sql("SELECT usuario, perfil FROM usuarios WHERE aprovado = 1", conn)
+            
+            if not ativos.empty:
+                col_u1, col_u2, col_u3 = st.columns([2, 2, 2])
+                with col_u1:
+                    usr_editar = st.selectbox("Selecione o usuário para gerenciar:", list(ativos["usuario"]), key="usr_edit")
+                
+                perfil_atual_db = ativos[ativos['usuario'] == usr_editar]['perfil'].values[0]
+                idx_perfil = 0 if perfil_atual_db == "Operador" else 1
+
+                with col_u2:
+                    novo_perfil = st.selectbox("Novo Nível de Acesso:", ["Operador", "Administrador"], index=idx_perfil, key="perf_edit")
+                with col_u3:
+                    st.write("") # Spacer vertical para alinhar o botão
+                    if st.button("🔄 Atualizar Perfil", use_container_width=True):
+                        # Trava de segurança para não rebaixar a si mesmo por acidente
+                        if usr_editar == st.session_state["usuario_atual"] and novo_perfil == "Operador":
+                            st.error("⚠️ Operação bloqueada! Você não pode rebaixar a própria conta para evitar perder o acesso à aba de Configurações.")
+                        else:
+                            with get_conn() as conn:
+                                conn.execute("UPDATE usuarios SET perfil = ? WHERE usuario = ?", (novo_perfil, usr_editar))
+                            disparar_sincronizacao()
+                            st.success(f"Perfil de '{usr_editar}' atualizado para {novo_perfil} com sucesso!")
+                            st.rerun()
+            st.divider()
+            # --------------------------------------------------------
 
             a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
             with a1:
