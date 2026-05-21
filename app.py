@@ -12,6 +12,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBa
 import numpy as np
 import threading
 import hashlib
+import uuid
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO SEGURO
@@ -56,7 +57,7 @@ def gerar_hash_senha(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
 # ─────────────────────────────────────────────────────────────
-# OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO (THREADING ASYNC)
+# OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO
 # ─────────────────────────────────────────────────────────────
 def executar_sincronizacao_drive():
     try:
@@ -127,12 +128,18 @@ def listar_movimentacoes():
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS sessoes (
+                token TEXT PRIMARY KEY,
+                usuario TEXT NOT NULL,
+                data_criacao TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS usuarios (
                 usuario TEXT PRIMARY KEY,
                 senha_hash TEXT NOT NULL,
                 pergunta_seguranca TEXT NOT NULL,
                 resposta_seguranca_hash TEXT NOT NULL,
-                aprovado INTEGER DEFAULT 0
+                aprovado INTEGER DEFAULT 0,
+                perfil TEXT DEFAULT 'Operador'
             );
             CREATE TABLE IF NOT EXISTS produtos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,10 +161,11 @@ def init_db():
             );
         """)
         
-        try:
-            conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
-        except:
-            pass
+        # Migrações seguras
+        try: conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
+        except: pass
+        try: conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
+        except: pass
 
 def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time):
     try:
@@ -176,19 +184,31 @@ def deletar_produto(id_produto):
         conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO CONTROLADA
+# INICIALIZAÇÃO E CONTROLE DE SESSÃO (CORREÇÃO DO F5)
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
     descarregar_do_drive()
     init_db()
     st.session_state["db_sincronizado"] = True
 
+# Validador de Token (Mantém logado mesmo dando F5)
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
     st.session_state["usuario_atual"] = ""
+    st.session_state["perfil_atual"] = ""
+    
+    # Se existe um token na URL, valida no banco de dados invisivelmente
+    if "token" in st.query_params:
+        token = st.query_params["token"]
+        with get_conn() as conn:
+            sessao = conn.execute("SELECT s.usuario, u.perfil FROM sessoes s JOIN usuarios u ON s.usuario = u.usuario WHERE s.token = ?", (token,)).fetchone()
+            if sessao:
+                st.session_state["autenticado"] = True
+                st.session_state["usuario_atual"] = sessao[0]
+                st.session_state["perfil_atual"] = sessao[1]
 
 # ─────────────────────────────────────────────────────────────
-# FLUXO DE LOGIN / ACESSO DO USUÁRIO (COM FILTRO DE APROVAÇÃO)
+# FLUXO DE LOGIN / ACESSO DO USUÁRIO
 # ─────────────────────────────────────────────────────────────
 if not st.session_state["autenticado"]:
     st.title("🔒 WMS Inteligente - Controle de Acesso")
@@ -206,12 +226,20 @@ if not st.session_state["autenticado"]:
                 if usr_input and pass_input:
                     hash_login = gerar_hash_senha(pass_input)
                     with get_conn() as conn:
-                        res = conn.execute("SELECT aprovado FROM usuarios WHERE usuario = ? AND senha_hash = ?", (usr_input, hash_login)).fetchone()
+                        res = conn.execute("SELECT aprovado, perfil FROM usuarios WHERE usuario = ? AND senha_hash = ?", (usr_input, hash_login)).fetchone()
                     
                     if res:
                         if res[0] == 1:
                             st.session_state["autenticado"] = True
                             st.session_state["usuario_atual"] = usr_input
+                            st.session_state["perfil_atual"] = res[1]
+                            
+                            # Gera um token seguro para salvar a sessão contra F5
+                            novo_token = str(uuid.uuid4())
+                            st.query_params["token"] = novo_token
+                            with get_conn() as conn:
+                                conn.execute("INSERT INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (novo_token, usr_input, str(datetime.now())))
+                            
                             st.toast(f"Bem-vindo de volta, {usr_input}!", icon="👋")
                             st.rerun()
                         else:
@@ -239,11 +267,12 @@ if not st.session_state["autenticado"]:
             if btn_cadastrar:
                 if new_usr and new_pass and resposta:
                     status_inicial = 1 if new_usr.lower() == "admin" else 0
+                    perfil_inicial = "Administrador" if new_usr.lower() == "admin" else "Operador"
                     try:
                         with get_conn() as conn:
                             conn.execute(
-                                "INSERT INTO usuarios (usuario, senha_hash, pergunta_seguranca, resposta_seguranca_hash, aprovado) VALUES (?, ?, ?, ?, ?)",
-                                (new_usr, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(resposta), status_inicial)
+                                "INSERT INTO usuarios (usuario, senha_hash, pergunta_seguranca, resposta_seguranca_hash, aprovado, perfil) VALUES (?, ?, ?, ?, ?, ?)",
+                                (new_usr, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(resposta), status_inicial, perfil_inicial)
                             )
                         disparar_sincronizacao()
                         if status_inicial == 1:
@@ -292,17 +321,30 @@ if not st.session_state["autenticado"]:
 else:
     with st.sidebar:
         st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
+        st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
         if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
+            # Exclui o token de sessão do banco e da URL para segurança total
+            if "token" in st.query_params:
+                with get_conn() as conn:
+                    conn.execute("DELETE FROM sessoes WHERE token = ?", (st.query_params["token"],))
+                st.query_params.clear()
+                
             st.session_state["autenticado"] = False
             st.session_state["usuario_atual"] = ""
+            st.session_state["perfil_atual"] = ""
             st.rerun()
 
     df = listar_produtos()
     
-    # CONSTRUÇÃO DAS ABAS OPERACIONAIS (LINHA CORRIGIDA AQUI)
-    aba_painel, aba_operacao, aba_contagem, aba_ia, aba_historico, aba_gestao = st.tabs([
-        "📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "🧠 IA Analista", "📜 Histórico", "⚙️ Config"
-    ])
+    # ─── CONTROLE DE ACESSO DE TELAS (RBAC) ───
+    tabs_disponiveis = ["📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "📜 Histórico"]
+    is_admin = st.session_state.get("perfil_atual") == "Administrador"
+    
+    if is_admin:
+        tabs_disponiveis.extend(["🧠 IA Analista", "⚙️ Config"])
+        
+    abas = st.tabs(tabs_disponiveis)
+    aba_painel, aba_operacao, aba_contagem, aba_historico = abas[0], abas[1], abas[2], abas[3]
     
     # PAINEL PRINCIPAL
     with aba_painel:
@@ -332,7 +374,6 @@ else:
             df['Status'] = df.apply(set_status, axis=1)
             df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-            # CARDS DE MÉTRICAS DINÂMICOS
             itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
             if itens_criticos > 0:
                 card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
@@ -465,13 +506,25 @@ else:
                         st.toast(f"📤 Baixa realizada com sucesso!", icon="🚀")
                         st.rerun()
 
-    # AUDITORIA / CONTAGEM
+    # AUDITORIA / CONTAGEM COM MARCADOR VISUAL INTELIGENTE
     with aba_contagem:
-        st.subheader("📋 Auditoria de Inventário Semanal")
+        st.subheader("📋 Auditoria de Inventário Diária/Semanal")
         if not df.empty:
+            # Puxa a data de hoje e verifica quem já foi contado
+            hoje = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y")
+            with get_conn() as conn:
+                query_hoje = f"SELECT id_produto FROM movimentacoes WHERE tipo = 'Contagem' AND data_hora LIKE '{hoje}%'"
+                contados_hoje_df = pd.read_sql(query_hoje, conn)
+            ids_contados_hoje = contados_hoje_df['id_produto'].tolist()
+            
             with st.container(border=True):
-                ops = dict(zip(df["nome"], df["id"]))
-                sel_c = st.selectbox("Selecione o Insumo para Contagem", list(ops.keys()), key="c_p")
+                # Cria a lista do seletor aplicando a marca ✅ em quem já foi lido hoje
+                ops = {}
+                for _, row in df.iterrows():
+                    nome_exib = f"✅ {row['nome']} (Auditado Hoje)" if row['id'] in ids_contados_hoje else row['nome']
+                    ops[nome_exib] = row['id']
+                
+                sel_c = st.selectbox("Selecione o Insumo para Contagem:", list(ops.keys()), key="c_p")
                 id_pc = ops[sel_c]
                 s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
                 st.metric("Saldo Atual no Sistema", f"{s_sis} un")
@@ -487,7 +540,10 @@ else:
                     st.toast(f"📋 Inventário gravado!", icon="💾")
                     st.rerun()
 
-            # HISTÓRICO DE DIVERGÊNCIAS
+            # Resumo visual extra de itens concluídos hoje
+            if ids_contados_hoje:
+                st.success(f"📌 Excelente! Você já auditou {len(set(ids_contados_hoje))} insumos na data de hoje ({hoje}).")
+
             st.divider()
             st.subheader("📉 Relatório de Ajustes e Perdas do Inventário")
             prod_lista = ["Todos os Insumos"] + list(df["nome"].unique())
@@ -514,23 +570,6 @@ else:
                     if val > 0: return 'color: #10b859; font-weight: bold;'
                     return 'color: #94a3b8;'
                 st.dataframe(hist_inv.style.map(cor_divergencia, subset=['Divergência']), hide_index=True, width='stretch')
-
-    # IA ANALISTA
-    with aba_ia:
-        st.subheader("🧠 Assistente IA de Suprimentos")
-        if st.button("✨ Gerar Diagnóstico Logístico"):
-            if not df.empty:
-                with st.spinner("Analisando dados..."):
-                    try:
-                        with get_conn() as conn:
-                            cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
-                        cons_dict = dict(cons)
-                        df['consumo_mensal'] = df['id'].map(cons_dict).fillna(0).astype(int)
-                        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        mod = genai.GenerativeModel('gemini-pro')
-                        prompt = f"Analise o estoque logístico:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)}"
-                        st.write(mod.generate_content(prompt).text)
-                    except Exception as e: st.error(f"Erro IA: {e}")
 
     # HISTÓRICO
     with aba_historico:
@@ -562,26 +601,51 @@ else:
             mes_selecionado = st.selectbox("Filtrar por Período:", sorted(mv['Mês/Ano'].unique(), reverse=True))
             st.dataframe(mv[mv['Mês/Ano'] == mes_selecionado].drop(columns=['Mês/Ano']), use_container_width=True, hide_index=True)
 
-    # GESTÃO E PAINEL DE APROVAÇÕES EXCLUSIVO DE ADMINISTRADOR
-    with aba_gestao:
-        if st.session_state["usuario_atual"].lower() == "admin":
+    # CONTEÚDO EXCLUSIVO DO ADMINISTRADOR (IA E CONFIG)
+    if is_admin:
+        aba_ia, aba_gestao = abas[4], abas[5]
+        
+        with aba_ia:
+            st.subheader("🧠 Assistente IA de Suprimentos")
+            try:
+                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                modelos_validos = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                modelo_selecionado = st.selectbox("🤖 Selecione a versão do modelo de IA:", modelos_validos, index=0)
+                
+                if st.button("✨ Gerar Diagnóstico Logístico"):
+                    if not df.empty:
+                        with st.spinner(f"Analisando dados com a versão {modelo_selecionado}..."):
+                            with get_conn() as conn:
+                                cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
+                            cons_dict = dict(cons)
+                            df['consumo_mensal'] = df['id'].map(cons_dict).fillna(0).astype(int)
+                            
+                            mod = genai.GenerativeModel(modelo_selecionado)
+                            prompt = f"Analise o estoque logístico:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)}\nEntregue: Resumo de saúde, riscos de ruptura antes do lead time e sugestão de compras."
+                            st.write(mod.generate_content(prompt).text)
+            except Exception as e:
+                st.error(f"Erro de comunicação com a API do Google: {e}") 
+
+        with aba_gestao:
             st.markdown("### 👑 Painel de Aprovações de Novos Operadores")
             with get_conn() as conn:
                 pendentes = pd.read_sql("SELECT usuario, pergunta_seguranca FROM usuarios WHERE aprovado = 0", conn)
             
             if not pendentes.empty:
                 st.dataframe(pendentes, use_container_width=True, hide_index=True)
-                col_sel, col_act = st.columns([3, 2])
+                col_sel, col_perf, col_act = st.columns([2, 2, 2])
                 with col_sel:
-                    usr_alvo = st.selectbox("Selecione o usuário para gerenciar:", list(pendentes["usuario"]))
+                    usr_alvo = st.selectbox("Selecione o usuário:", list(pendentes["usuario"]))
+                with col_perf:
+                    perfil_alvo = st.selectbox("Nível de Acesso:", ["Operador", "Administrador"])
                 with col_act:
                     c_ap, c_rec = st.columns(2)
                     with c_ap:
                         if st.button("✅ Aprovar", use_container_width=True):
                             with get_conn() as conn:
-                                conn.execute("UPDATE usuarios SET aprovado = 1 WHERE usuario = ?", (usr_alvo,))
+                                conn.execute("UPDATE usuarios SET aprovado = 1, perfil = ? WHERE usuario = ?", (perfil_alvo, usr_alvo))
                             disparar_sincronizacao()
-                            st.success(f"O operador '{usr_alvo}' agora possui acesso liberado ao WMS!")
+                            st.success(f"Operador '{usr_alvo}' liberado como {perfil_alvo}!")
                             st.rerun()
                     with c_rec:
                         if st.button("❌ Recusar", use_container_width=True):
@@ -594,49 +658,49 @@ else:
                 st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
             st.divider()
 
-        a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
-        with a1:
-            with st.form("new_p"):
-                n = st.text_input("Nome do Insumo")
-                c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
-                m = st.number_input("Mínimo", value=10)
-                l = st.number_input("Lead Time (Dias)", value=3)
-                v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
-                if st.form_submit_button("Cadastrar"):
-                    if n.strip():
-                        cadastrar_produto(n.strip(), m, v, c, l)
-                        disparar_sincronizacao()
-                        st.toast(f"➕ Cadastrado!", icon="✨")
-                        st.rerun()
-                    
-        with a2:
-            if not df.empty:
-                op_e = dict(zip(df["nome"], df["id"]))
-                s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
-                id_e = op_e[s_e]
-                p_at = df[df["id"]==id_e].iloc[0]
-                with st.form("edit_p"):
-                    en = st.text_input("Nome", value=p_at["nome"])
-                    ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
-                    em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
-                    el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
-                    ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
-                    if st.form_submit_button("Atualizar"):
-                        editar_produto(id_e, en, em, ev, ec, el)
-                        disparar_sincronizacao()
-                        st.toast(f"✏️ Atualizado!", icon="⚙️")
-                        st.rerun()
+            a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
+            with a1:
+                with st.form("new_p"):
+                    n = st.text_input("Nome do Insumo")
+                    c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                    m = st.number_input("Mínimo", value=10)
+                    l = st.number_input("Lead Time (Dias)", value=3)
+                    v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
+                    if st.form_submit_button("Cadastrar"):
+                        if n.strip():
+                            cadastrar_produto(n.strip(), m, v, c, l)
+                            disparar_sincronizacao()
+                            st.toast(f"➕ Cadastrado!", icon="✨")
+                            st.rerun()
                         
-        with a3:
-            if not df.empty:
-                op_d = dict(zip(df["nome"], df["id"]))
-                s_d = st.selectbox("Selecione para Excluir", list(op_d.keys()))
-                id_d = op_d[s_d]
-                confirmar = st.checkbox("Confirmo que pretendo apagar este insumo e destruir seu histórico.")
-                if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar):
-                    try:
-                        deletar_produto(id_d)
-                        disparar_sincronizacao()
-                        st.toast(f"🗑️ Removido!", icon="🗑️")
-                        st.rerun()
-                    except Exception as e: st.error(f"Erro: {e}")
+            with a2:
+                if not df.empty:
+                    op_e = dict(zip(df["nome"], df["id"]))
+                    s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
+                    id_e = op_e[s_e]
+                    p_at = df[df["id"]==id_e].iloc[0]
+                    with st.form("edit_p"):
+                        en = st.text_input("Nome", value=p_at["nome"])
+                        ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                        em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
+                        el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
+                        ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
+                        if st.form_submit_button("Atualizar"):
+                            editar_produto(id_e, en, em, ev, ec, el)
+                            disparar_sincronizacao()
+                            st.toast(f"✏️ Atualizado!", icon="⚙️")
+                            st.rerun()
+                            
+            with a3:
+                if not df.empty:
+                    op_d = dict(zip(df["nome"], df["id"]))
+                    s_d = st.selectbox("Selecione para Excluir", list(op_d.keys()))
+                    id_d = op_d[s_d]
+                    confirmar = st.checkbox("Confirmo que pretendo apagar este insumo e destruir seu histórico.")
+                    if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar):
+                        try:
+                            deletar_produto(id_d)
+                            disparar_sincronizacao()
+                            st.toast(f"🗑️ Removido!", icon="🗑️")
+                            st.rerun()
+                        except Exception as e: st.error(f"Erro: {e}")
