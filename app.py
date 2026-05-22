@@ -635,11 +635,12 @@ else:
     # ══════════════════════════════════════════════════════════════════════════
     # PAINEL
     # ══════════════════════════════════════════════════════════════════════════
-    with aba_painel:
+  with aba_painel:
         df = listar_produtos()
         cons = calcular_consumo_mensal()
         
         if not df.empty:
+            # Merge preservando todas as colunas de 'df' (produtos)
             df = df.merge(cons, left_on="id", right_on="id_produto", how="left").fillna(0)
             
             df["valor_total"]    = df["saldo_atual"] * df["valor_unitario"]
@@ -649,12 +650,14 @@ else:
             df.loc[mask, "Runway"] = (df.loc[mask, "saldo_atual"] / df.loc[mask, "consumo_diario"]).astype(int)
 
             def set_status(row):
+                # Usamos .get para evitar KeyError se a coluna falhar
                 lead = row.get("lead_time", 3)
                 if row["saldo_atual"] <= RUPTURA_LIMITE:           return "🔴 Ruptura"
                 if row["saldo_atual"] < row["estoque_minimo"]:   return "🔴 Crítico"
                 if row["Runway"] != 999 and row["Runway"] <= lead: return "🟠 Risco"
                 return "🟢 OK"
 
+            # Garantimos que 'lead_time' está no eixo de aplicação
             df["Status"]     = df.apply(set_status, axis=1)
             df["Runway_Txt"] = df["Runway"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
@@ -697,11 +700,17 @@ else:
             with g1:
                 st.markdown("##### Giro por categoria")
                 giro = df.groupby("categoria")["total"].sum().reset_index()
-                st.bar_chart(data=giro, x="categoria", y="total", use_container_width=True) if giro["total"].sum() > 0 else st.info("Sem saídas.")
+                if giro["total"].sum() > 0:
+                    st.bar_chart(data=giro, x="categoria", y="total", use_container_width=True)
+                else:
+                    st.info("Sem saídas.")
             with g2:
                 st.markdown("##### Top 5 mais consumidos")
                 top = df[df["total"] > 0].nlargest(5, "total")[["nome","total"]]
-                st.bar_chart(data=top, x="nome", y="total", use_container_width=True) if not top.empty else st.info("Sem consumo.")
+                if not top.empty:
+                    st.bar_chart(data=top, x="nome", y="total", use_container_width=True)
+                else:
+                    st.info("Sem consumo.")
 
             st.divider()
             st.subheader("Sugestão de reposição")
@@ -714,7 +723,7 @@ else:
                 df_comp[["categoria","nome","lead_time","saldo_atual","Mínimo Ideal","Sugestão Compra"]]
                 .rename(columns={"categoria":"Setor","nome":"Produto","lead_time":"Entrega (d)","saldo_atual":"Saldo","Sugestão Compra":"Comprar"}),
                 hide_index=True, use_container_width=True,
-            )
+            ) 
 
     # ══════════════════════════════════════════════════════════════════════════
     # SAÍDAS / ENTRADAS
