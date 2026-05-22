@@ -57,7 +57,7 @@ def gerar_hash_senha(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
 # ─────────────────────────────────────────────────────────────
-# OPTIMIZAÇÃO: SINCRONIZAÇÃO EM SEGUNDO PLANO
+# OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO
 # ─────────────────────────────────────────────────────────────
 def executar_sincronizacao_drive():
     try:
@@ -316,7 +316,7 @@ if not st.session_state["autenticado"]:
                 st.error("Usuário não encontrado na base do sistema.")
 
 # ─────────────────────────────────────────────────────────────
-# CONTEÚDO OPERACIONAL DO WMS
+# CONTEÚDO OPERACIONAL DO WMS (RODA APENAS SE AUTENTICADO)
 # ─────────────────────────────────────────────────────────────
 else:
     with st.sidebar:
@@ -574,7 +574,7 @@ else:
                 item_analise = st.selectbox("Selecione o Insumo para ver a Curva de Custos:", list(df["nome"].unique()))
                 entradas_item = mv[(mv["produto"] == item_analise) & (mv["tipo"] == "Entrada")].copy()
                 
-                if not entries_item.empty if 'entries_item' in locals() else not entradas_item.empty:
+                if not entradas_item.empty:
                     def extrair_preco(obs):
                         try:
                             if "Pago: R$" in str(obs):
@@ -601,14 +601,12 @@ else:
             st.subheader("🧠 Assistente IA de Suprimentos")
             try:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                
-                # Lista estática dos modelos estáveis recomendados para evitar delays de API no Streamlit
-                modelos_validos = ["gemini-1.5-flash", "gemini-1.5-pro"]
+                modelos_validos = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 modelo_selecionado = st.selectbox("🤖 Selecione a versão do modelo de IA:", modelos_validos, index=0)
                 
                 if st.button("✨ Gerar Diagnóstico Logístico"):
                     if not df.empty:
-                        with st.spinner(f"Analisando dados com o {modelo_selecionado}..."):
+                        with st.spinner(f"Analisando dados com a versão {modelo_selecionado}..."):
                             with get_conn() as conn:
                                 cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
                             cons_dict = dict(cons)
@@ -616,8 +614,7 @@ else:
                             
                             mod = genai.GenerativeModel(modelo_selecionado)
                             prompt = f"Analise o estoque logístico:\n{df[['categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'consumo_mensal']].to_string(index=False)}\nEntregue: Resumo de saúde, riscos de ruptura antes do lead time e sugestão de compras."
-                            resposta_ia = mod.generate_content(prompt)
-                            st.write(resposta_ia.text)
+                            st.write(mod.generate_content(prompt).text)
             except Exception as e:
                 st.error(f"Erro de comunicação com a API do Google: {e}") 
 
@@ -652,3 +649,80 @@ else:
             else:
                 st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
             st.divider()
+
+            # --- NOVO PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
+            st.markdown("### 👥 Gerenciamento de Usuários Ativos")
+            with get_conn() as conn:
+                ativos = pd.read_sql("SELECT usuario, perfil FROM usuarios WHERE aprovado = 1", conn)
+            
+            if not ativos.empty:
+                col_u1, col_u2, col_u3 = st.columns([2, 2, 2])
+                with col_u1:
+                    usr_editar = st.selectbox("Selecione o usuário para gerenciar:", list(ativos["usuario"]), key="usr_edit")
+                
+                perfil_atual_db = ativos[ativos['usuario'] == usr_editar]['perfil'].values[0]
+                idx_perfil = 0 if perfil_atual_db == "Operador" else 1
+
+                with col_u2:
+                    novo_perfil = st.selectbox("Novo Nível de Acesso:", ["Operador", "Administrador"], index=idx_perfil, key="perf_edit")
+                with col_u3:
+                    st.write("") # Spacer vertical para alinhar o botão
+                    if st.button("🔄 Atualizar Perfil", use_container_width=True):
+                        # Trava de segurança para não rebaixar a si mesmo por acidente
+                        if usr_editar == st.session_state["usuario_atual"] and novo_perfil == "Operador":
+                            st.error("⚠️ Operação bloqueada! Você não pode rebaixar a própria conta para evitar perder o acesso à aba de Configurações.")
+                        else:
+                            with get_conn() as conn:
+                                conn.execute("UPDATE usuarios SET perfil = ? WHERE usuario = ?", (novo_perfil, usr_editar))
+                            disparar_sincronizacao()
+                            st.success(f"Perfil de '{usr_editar}' atualizado para {novo_perfil} com sucesso!")
+                            st.rerun()
+            st.divider()
+            # --------------------------------------------------------
+
+            a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
+            with a1:
+                with st.form("new_p"):
+                    n = st.text_input("Nome do Insumo")
+                    c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                    m = st.number_input("Mínimo", value=10)
+                    l = st.number_input("Lead Time (Dias)", value=3)
+                    v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
+                    if st.form_submit_button("Cadastrar"):
+                        if n.strip():
+                            cadastrar_produto(n.strip(), m, v, c, l)
+                            disparar_sincronizacao()
+                            st.toast(f"➕ Cadastrado!", icon="✨")
+                            st.rerun()
+                        
+            with a2:
+                if not df.empty:
+                    op_e = dict(zip(df["nome"], df["id"]))
+                    s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
+                    id_e = op_e[s_e]
+                    p_at = df[df["id"]==id_e].iloc[0]
+                    with st.form("edit_p"):
+                        en = st.text_input("Nome", value=p_at["nome"])
+                        ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
+                        em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
+                        el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
+                        ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
+                        if st.form_submit_button("Atualizar"):
+                            editar_produto(id_e, en, em, ev, ec, el)
+                            disparar_sincronizacao()
+                            st.toast(f"✏️ Atualizado!", icon="⚙️")
+                            st.rerun()
+                            
+            with a3:
+                if not df.empty:
+                    op_d = dict(zip(df["nome"], df["id"]))
+                    s_d = st.selectbox("Selecione para Excluir", list(op_d.keys()))
+                    id_d = op_d[s_d]
+                    confirmar = st.checkbox("Confirmo que pretendo apagar este insumo e destruir seu histórico.")
+                    if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar):
+                        try:
+                            deletar_produto(id_d)
+                            disparar_sincronizacao()
+                            st.toast(f"🗑️ Removido!", icon="🗑️")
+                            st.rerun()
+                        except Exception as e: st.error(f"Erro: {e}")
