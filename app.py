@@ -26,9 +26,9 @@ CACHE_TTL      = 30
 CATEGORIAS     = ["Limpeza", "Copa", "EPI", "Escritório", "Geral"]
 PERFIS         = ["Operador", "Administrador"]
 RUPTURA_LIMITE = 0
-SESSION_TTL_H  = 8    # [1] horas até o token expirar
-MAX_TENTATIVAS = 5    # [2] tentativas antes do bloqueio
-BLOQUEIO_MIN   = 30   # [2] minutos de cooldown
+SESSION_TTL_H  = 8    # Horas até o token expirar
+MAX_TENTATIVAS = 5    # Tentativas antes do bloqueio
+BLOQUEIO_MIN   = 30   # Minutos de cooldown
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("wms")
@@ -146,7 +146,7 @@ def hash_senha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
 
-# ── [1] Sessão com TTL ───────────────────────────────────────────────────────
+# ── Sessão com TTL ───────────────────────────────────────────────────────────
 def _criar_sessao(usuario: str) -> str:
     token  = str(uuid.uuid4())
     agora  = _now_dt()
@@ -179,7 +179,7 @@ def _revogar_token(token: str) -> None:
         conn.execute("DELETE FROM sessoes WHERE token=?", (token,))
 
 
-# ── [2] Rate limiting ────────────────────────────────────────────────────────
+# ── Rate limiting ────────────────────────────────────────────────────────────
 def _verificar_bloqueio(usuario: str) -> tuple[bool, int]:
     with get_conn() as conn:
         row = conn.execute(
@@ -279,7 +279,7 @@ def invalidar_cache() -> None:
 def _reg_mov(conn, id_produto, tipo, quantidade, saldo_resultante, obs=""):
     conn.execute(
         "INSERT INTO movimentacoes (id_produto,data_hora,tipo,quantidade,saldo_resultante,observacao) VALUES (?,?,?,?,?,?)",
-        (id_produto, _now_str(), tipo, quantidade, saldo_resultante, obs),
+        (id_produto, _now_str(), tipo, quantity := quantidade, saldo_resultante, obs),
     )
 
 
@@ -293,7 +293,13 @@ def registrar_entrada(id_produto, quantidade, preco_compra, obs=""):
                 return False, "Produto não encontrado."
             saldo_ant, pmp_ant = row
             total_novo = saldo_ant + quantidade
-            novo_pmp = ((saldo_ant * pmp_ant) + (quantidade * preco_compra)) / total_novo if total_novo else preco_compra
+            
+            # Trava de segurança para cálculo do PMP coerente
+            if total_novo > 0:
+                novo_pmp = ((saldo_ant * pmp_ant) + (quantidade * preco_compra)) / total_novo
+            else:
+                novo_pmp = preco_compra
+                
             conn.execute(
                 "UPDATE produtos SET saldo_atual=saldo_atual+?, valor_unitario=? WHERE id=?",
                 (quantidade, novo_pmp, id_produto),
@@ -340,7 +346,7 @@ def registrar_ajuste(id_produto, novo_saldo, motivo=""):
             ant = conn.execute("SELECT saldo_atual FROM produtos WHERE id=?", (id_produto,)).fetchone()[0]
             conn.execute("UPDATE produtos SET saldo_atual=? WHERE id=?", (novo_saldo, id_produto))
             _reg_mov(conn, id_produto, "Ajuste", novo_saldo - ant, novo_saldo, motivo)
-        return True, f"Saldo ajustado para {novo_saldo}"
+        return True, f"Saldo adjusted para {novo_saldo}"
     except Exception as e:
         log.error("registrar_ajuste: %s", e)
         return False, str(e)
@@ -400,9 +406,18 @@ def _upsert_drive(svc, name, media):
 
 
 def _executar_sync():
+    backup_file = "estoque_backup.db"
     try:
         svc = _drive_svc()
-        _upsert_drive(svc, DB_PATH, MediaFileUpload(DB_PATH, mimetype="application/x-sqlite3", resumable=True))
+        
+        # Correção Crítica: Faz cópia segura via Backup nativo para não prender o WAL ativo
+        with get_conn() as conn:
+            bck = sqlite3.connect(backup_file)
+            conn.backup(bck)
+            bck.close()
+            
+        _upsert_drive(svc, DB_PATH, MediaFileUpload(backup_file, mimetype="application/x-sqlite3", resumable=True))
+        
         with get_conn() as conn:
             prods = pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
             movs  = pd.read_sql("""
@@ -410,14 +425,22 @@ def _executar_sync():
                        m.quantidade, m.saldo_resultante, m.observacao
                 FROM movimentacoes m JOIN produtos p ON p.id=m.id_produto ORDER BY m.id DESC
             """, conn)
+            
         for df_e, fname in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
             _upsert_drive(svc, fname,
                 MediaIoBaseUpload(BytesIO(df_e.to_csv(index=False).encode("utf-8-sig")), mimetype="text/csv"))
+                
         st.session_state["ultima_sync"] = _now_str()
         st.session_state["sync_erro"]   = None
     except Exception as e:
         log.error("sync Drive: %s", e)
         st.session_state["sync_erro"] = str(e)
+    finally:
+        if os.path.exists(backup_file):
+            try:
+                os.remove(backup_file)
+            except Exception:
+                pass
 
 
 def disparar_sync():
@@ -609,15 +632,14 @@ else:
     abas = st.tabs(nomes_abas)
     aba_painel, aba_op, aba_inv, aba_hist = abas[:4]
 
- # ══════════════════════════════════════════════════════════════════════════
-    # PAINEL (CORRIGIDO)
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAINEL
     # ══════════════════════════════════════════════════════════════════════════
     with aba_painel:
         df = listar_produtos()
         cons = calcular_consumo_mensal()
         
         if not df.empty:
-            # Merge preservando todas as colunas de 'df' (produtos)
             df = df.merge(cons, left_on="id", right_on="id_produto", how="left").fillna(0)
             
             df["valor_total"]    = df["saldo_atual"] * df["valor_unitario"]
@@ -627,18 +649,14 @@ else:
             df.loc[mask, "Runway"] = (df.loc[mask, "saldo_atual"] / df.loc[mask, "consumo_diario"]).astype(int)
 
             def set_status(row):
-                # Usamos .get para evitar KeyError se a coluna falhar
                 lead = row.get("lead_time", 3)
-                if row["saldo_atual"] <= RUPTURA_LIMITE:          return "🔴 Ruptura"
+                if row["saldo_atual"] <= RUPTURA_LIMITE:           return "🔴 Ruptura"
                 if row["saldo_atual"] < row["estoque_minimo"]:   return "🔴 Crítico"
                 if row["Runway"] != 999 and row["Runway"] <= lead: return "🟠 Risco"
                 return "🟢 OK"
 
-            # Garantimos que 'lead_time' está no eixo de aplicação
             df["Status"]     = df.apply(set_status, axis=1)
             df["Runway_Txt"] = df["Runway"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
-
-            # ... (seu código de métricas e gráficos segue igual) 
 
             itens_crit = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
             cor = "#ef4444" if itens_crit else "#10b859"
@@ -817,7 +835,7 @@ else:
                 st.dataframe(hist_inv.style.map(cor_div, subset=["Divergência"]), hide_index=True, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # [4] HISTÓRICO — PERÍODO CUSTOMIZADO + EXPORTAÇÃO CSV
+    # HISTÓRICO
     # ══════════════════════════════════════════════════════════════════════════
     with aba_hist:
         st.subheader("📜 Histórico de movimentações")
@@ -861,7 +879,6 @@ else:
             di_str = data_ini.strftime(FMT_DATE)
             df_str = data_fim.strftime(FMT_DATE)
 
-            # Converte para datetime para comparação correta com formato br
             def _parse_br(s):
                 try:
                     return datetime.strptime(s, FMT_DATE)
@@ -918,31 +935,30 @@ else:
                         st.session_state["ia_hist"] = []
                         st.rerun()
 
-                # Inicializa histórico
                 if "ia_hist" not in st.session_state:
                     st.session_state["ia_hist"] = []
 
-                # Contexto de estoque injetado no sistema
+                # Correção: Otimizado injeção com tabela Markdown limpa para o Gemini ler melhor
                 def _ctx_estoque() -> str:
                     df_ia   = listar_produtos()
                     cons_ia = calcular_consumo_mensal()
                     df_ia   = df_ia.merge(cons_ia, left_on="id", right_on="id_produto", how="left").fillna(0)
                     df_ia["consumo_mensal"] = df_ia["total"].astype(int)
-                    tabela  = df_ia[["categoria","nome","saldo_atual","estoque_minimo","lead_time","consumo_mensal"]].to_string(index=False)
+                    
+                    # Converte para Markdown estruturado (ideal para LLMs estruturarem raciocínio)
+                    tabela = df_ia[["categoria","nome","saldo_atual","estoque_minimo","lead_time","consumo_mensal"]].to_markdown(index=False)
                     return (
                         "Você é um assistente especialista em logística e gestão de armazém. "
                         "Responda sempre em português brasileiro, de forma direta e objetiva. "
-                        "Abaixo está a posição atual do estoque (dados reais, atualizados agora):\n\n"
+                        "Abaixo está a posição atual do estoque estruturada:\n\n"
                         f"{tabela}\n\n"
                         "Use esses dados para responder as perguntas do operador."
                     )
 
-                # Exibe histórico da conversa
                 for msg in st.session_state["ia_hist"]:
                     with st.chat_message(msg["role"]):
                         st.markdown(msg["content"])
 
-                # Atalho de diagnóstico quando conversa está vazia
                 if not st.session_state["ia_hist"]:
                     st.caption("Faça uma pergunta ou gere um diagnóstico completo:")
                     if st.button("✨ Diagnóstico completo do estoque", use_container_width=True):
@@ -952,20 +968,16 @@ else:
                         })
                         st.rerun()
 
-                # Input do chat
                 pergunta = st.chat_input("Pergunte sobre o estoque...")
                 if pergunta:
                     st.session_state["ia_hist"].append({"role": "user", "content": pergunta})
 
-                    # Monta histórico para a API do Gemini
-                    # A primeira mensagem do usuário sempre carrega o contexto de estoque
-                    ctx     = _ctx_estoque()
-                    hist    = st.session_state["ia_hist"]
+                    ctx      = _ctx_estoque()
+                    hist     = st.session_state["ia_hist"]
                     api_hist = []
 
                     for i, msg in enumerate(hist):
                         role = "user" if msg["role"] == "user" else "model"
-                        # Injeta contexto apenas na primeira mensagem do usuário
                         if i == 0:
                             content = f"{ctx}\n\n---\nPergunta do operador:\n{msg['content']}"
                         else:
