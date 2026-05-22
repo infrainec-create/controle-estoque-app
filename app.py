@@ -1,12 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# WMS 4.0 — v3
-# Melhorias desta versão:
-#   [1] Expiração de sessão — token com TTL de 8h, limpeza automática
-#   [2] Rate limiting de login — bloqueio após 5 tentativas por 30 min
-#   [4] Relatório por período customizado + exportação CSV
-#   [5] IA com chat contínuo e memória de contexto (Gemini)
-# ─────────────────────────────────────────────────────────────────────────────
-
 import streamlit as st
 import sqlite3
 from datetime import datetime, timedelta
