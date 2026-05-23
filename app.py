@@ -49,19 +49,23 @@ DB_PATH = "estoque.db"
 FOLDER_ID = st.secrets["FOLDER_ID"]
 
 # ─────────────────────────────────────────────────────────────
-# FUNÇÕES DE SEGURANÇA E CONEXÃO
+# FUNÇÕES DE SEGURANÇA E CONEXÃO OTIMIZADAS PARA CONCORRÊNCIA
 # ─────────────────────────────────────────────────────────────
-def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
+def get_conn(): 
+    # timeout=30.0 força a conexão a aguardar se o banco estiver ocupado por outra transação
+    return sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
 
 def gerar_hash_senha(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
 # ─────────────────────────────────────────────────────────────
-# OPTIMIZAÇÃO 1: SINCRONIZAÇÃO EM SEGUNDO PLANO
+# OTIMIZAÇÃO: SINCRONIZAÇÃO EM SEGUNDO PLANO (THREAD-SAFE)
 # ─────────────────────────────────────────────────────────────
 def executar_sincronizacao_drive():
     try:
         servico = obter_servico_drive()
+        
+        # 1. Upload Seguro do Banco de Dados (.db)
         query = f"name='{DB_PATH}' and '{FOLDER_ID}' in parents and trashed=false"
         files = servico.files().list(q=query, fields="files(id)").execute().get('files', [])
         media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
@@ -70,7 +74,8 @@ def executar_sincronizacao_drive():
         else: 
             servico.files().create(body={'name': DB_PATH, 'parents': [FOLDER_ID]}, media_body=media).execute()
         
-        with sqlite3.connect(DB_PATH) as conn:
+        # 2. Geração e Extração dos CSVs para o Looker Studio
+        with get_conn() as conn:
             prods = pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
             movs = pd.read_sql("""
                 SELECT m.id, p.nome AS produto, m.data_hora, m.tipo, m.quantidade, m.saldo_resultante, m.observacao
@@ -83,11 +88,17 @@ def executar_sincronizacao_drive():
             m = MediaIoBaseUpload(BytesIO(df.to_csv(index=False).encode('utf-8-sig')), mimetype='text/csv')
             if fs: servico.files().update(fileId=fs[0]['id'], media_body=m).execute()
             else: servico.files().create(body={'name': name, 'parents': [FOLDER_ID]}, media_body=m).execute()
-    except:
-        pass
+            
+        # Alimenta o st.session_state indicando sucesso para a interface
+        st.session_state["status_sinc"] = {"sucesso": True, "mensagem": "Nuvem sincronizada com sucesso!", "timestamp": datetime.now()}
+    except sqlite3.OperationalError as e:
+        st.session_state["status_sinc"] = {"sucesso": False, "mensagem": f"Banco de dados ocupado: {e}", "timestamp": datetime.now()}
+    except Exception as e:
+        st.session_state["status_sinc"] = {"sucesso": False, "mensagem": f"Erro de comunicação Drive: {e}", "timestamp": datetime.now()}
 
 def disparar_sincronizacao():
     st.cache_data.clear()
+    st.session_state["status_sinc"] = {"sucesso": True, "mensagem": "Sincronizando em segundo plano...", "timestamp": datetime.now()}
     threading.Thread(target=executar_sincronizacao_drive).start()
 
 def obter_servico_drive():
@@ -127,6 +138,10 @@ def listar_movimentacoes():
 
 def init_db():
     with get_conn() as conn:
+        # ATIVAÇÃO DO MODO WAL (Write-Ahead Logging) para concorrência segura
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sessoes (
                 token TEXT PRIMARY KEY,
@@ -332,6 +347,14 @@ else:
             st.session_state["usuario_atual"] = ""
             st.session_state["perfil_atual"] = ""
             st.rerun()
+            
+        # Monitoramento em tempo real do status de conexões e sincronia da nuvem
+        if "status_sinc" in st.session_state:
+            status = st.session_state["status_sinc"]
+            if status["sucesso"]:
+                st.caption(f"🟢 {status['mensagem']}")
+            else:
+                st.error(f"⚠️ {status['mensagem']}")
 
     df = listar_produtos()
     
@@ -650,7 +673,7 @@ else:
                 st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
             st.divider()
 
-            # --- NOVO PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
+            # --- PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
             st.markdown("### 👥 Gerenciamento de Usuários Ativos")
             with get_conn() as conn:
                 ativos = pd.read_sql("SELECT usuario, perfil FROM usuarios WHERE aprovado = 1", conn)
@@ -668,7 +691,6 @@ else:
                 with col_u3:
                     st.write("") # Spacer vertical para alinhar o botão
                     if st.button("🔄 Atualizar Perfil", use_container_width=True):
-                        # Trava de segurança para não rebaixar a si mesmo por acidente
                         if usr_editar == st.session_state["usuario_atual"] and novo_perfil == "Operador":
                             st.error("⚠️ Operação bloqueada! Você não pode rebaixar a própria conta para evitar perder o acesso à aba de Configurações.")
                         else:
@@ -678,7 +700,6 @@ else:
                             st.success(f"Perfil de '{usr_editar}' atualizado para {novo_perfil} com sucesso!")
                             st.rerun()
             st.divider()
-            # --------------------------------------------------------
 
             a1, a2, a3 = st.tabs(["➕ Novo Insumo", "✏️ Editar Insumo", "🗑️ Excluir Insumo"])
             with a1:
