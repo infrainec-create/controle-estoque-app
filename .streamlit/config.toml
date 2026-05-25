@@ -1,3 +1,2 @@
-[theme]
-primaryColor = "#0052cc"
-font = "sans serif"
+# O config.toml foi limpo para permitir que o Streamlit detecte e alterne
+# automaticamente entre o tema claro e escuro conforme a preferência do dispositivo/sistema.

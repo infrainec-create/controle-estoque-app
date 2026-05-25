@@ -1,3 +1,10 @@
 .venv/
 estoque.db
+estoque.db-shm
+estoque.db-wal
 .streamlit/secrets.toml
+node_modules/
+dist/
+.env
+*.csv
+.DS_Store
