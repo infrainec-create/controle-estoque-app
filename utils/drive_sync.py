@@ -115,6 +115,20 @@ def executar_sincronizacao_drive():
 
 def disparar_sincronizacao():
     st.cache_data.clear()
+    
+    # Verifica se a sincronização está ativa no banco de dados
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
+            if row and row[0] == '0':
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Sincronização na nuvem desativada localmente.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+                return
+    except Exception:
+        pass
+
     with get_conn() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",

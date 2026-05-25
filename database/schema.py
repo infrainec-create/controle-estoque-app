@@ -53,6 +53,10 @@ def init_db():
                 data_hora TEXT NOT NULL,
                 detalhes TEXT
             );
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL
+            );
         """)
         
         try: conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
@@ -60,6 +64,9 @@ def init_db():
         try: conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
         except: pass
         try: conn.execute("UPDATE usuarios SET perfil = 'Administrador' WHERE usuario = 'admin'")
+        except: pass
+        try:
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('drive_sync_ativo', '1')")
         except: pass
         
         # Seeding de dados iniciais caso a tabela de produtos esteja vazia para evitar telas em branco

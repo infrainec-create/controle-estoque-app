@@ -123,6 +123,38 @@ def render_config_ui(df):
                 except Exception as e: 
                     st.error(f"Erro: {e}")
 
+    # --- INTEGRAÇÃO COM GOOGLE DRIVE (NUVEM) ---
+    st.divider()
+    st.markdown("### ☁️ Integração com Google Drive (Nuvem)")
+    
+    with get_conn() as conn:
+        row_cfg = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
+        sync_atual = (row_cfg[0] == '1') if row_cfg else True
+        
+    novo_sync = st.toggle("Ativar sincronização automática em segundo plano", value=sync_atual)
+    
+    if novo_sync != sync_atual:
+        from datetime import datetime
+        valor_str = '1' if novo_sync else '0'
+        msg_aud = "Ativou a sincronização de nuvem." if novo_sync else "Desativou a sincronização de nuvem."
+        with get_conn() as conn:
+            conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'drive_sync_ativo'", (valor_str,))
+            if not novo_sync:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Sincronização na nuvem desativada localmente.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Sincronização na nuvem ativada.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+        registrar_log_auditoria(st.session_state["usuario_atual"], "Alterar Configuração Nuvem", msg_aud)
+        st.success("Configuração de nuvem atualizada!")
+        if novo_sync:
+            disparar_sincronizacao()
+        st.rerun()
+
     # --- HISTÓRICO GERAL DE AUDITORIA ---
     st.divider()
     st.markdown("### 📜 Histórico Geral de Auditoria WMS")
