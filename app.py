@@ -64,6 +64,33 @@ if "db_sincronizado" not in st.session_state:
 # Inicia chaves de sessão na memória
 inicializar_estados_sessao()
 
+# Recuperação de sessão persistente via Token na URL
+if not st.session_state["autenticado"]:
+    session_token = st.query_params.get("session")
+    if session_token:
+        try:
+            from datetime import datetime, timedelta
+            with get_conn() as conn:
+                sessao = conn.execute("SELECT usuario, data_criacao FROM sessoes WHERE token = ?", (session_token,)).fetchone()
+            if sessao:
+                usr, dt_criacao_str = sessao
+                dt_criacao = datetime.strptime(dt_criacao_str, "%Y-%m-%d %H:%M:%S")
+                # Sessão expira em 7 dias
+                if datetime.now() - dt_criacao < timedelta(days=7):
+                    with get_conn() as conn:
+                        res_usr = conn.execute("SELECT aprovado, perfil FROM usuarios WHERE usuario = ?", (usr,)).fetchone()
+                    if res_usr and res_usr[0] == 1:
+                        st.session_state["autenticado"] = True
+                        st.session_state["usuario_atual"] = usr
+                        st.session_state["perfil_atual"] = res_usr[1]
+                        st.rerun()
+                else:
+                    with get_conn() as conn:
+                        conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
+                    st.query_params.clear()
+        except Exception:
+            pass
+
 # ─────────────────────────────────────────────────────────────
 # FLUXO DE ROTEAMENTO VISUAL (AUTENTICAÇÃO & COMPONENTES)
 # ─────────────────────────────────────────────────────────────
@@ -75,6 +102,12 @@ else:
         st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
         st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
         if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
+            # Deletar sessão persistente se existir
+            session_token = st.query_params.get("session")
+            if session_token:
+                with get_conn() as conn:
+                    conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
+                st.query_params.clear()
             st.session_state["autenticado"] = False
             st.session_state["usuario_atual"] = ""
             st.session_state["perfil_atual"] = ""

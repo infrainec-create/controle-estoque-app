@@ -131,7 +131,27 @@ def render_config_ui(df):
         row_cfg = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
         sync_atual = (row_cfg[0] == '1') if row_cfg else True
         
-    novo_sync = st.toggle("Ativar sincronização automática em segundo plano", value=sync_atual)
+    col_tgl, col_btn = st.columns([3, 2])
+    with col_tgl:
+        novo_sync = st.toggle("Ativar sincronização automática em segundo plano", value=sync_atual)
+    with col_btn:
+        if st.button("🔄 Sincronizar Agora (Manual)", type="secondary", use_container_width=True):
+            from datetime import datetime
+            import threading
+            from utils.drive_sync import executar_sincronizacao_drive
+            
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Sincronização manual em execução...", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+            
+            # Executa a sincronização em segundo plano usando Thread
+            threading.Thread(target=executar_sincronizacao_drive).start()
+            registrar_log_auditoria(st.session_state["usuario_atual"], "Sincronização Manual", "Disparou sincronização manual com o Google Drive.")
+            st.toast("Nuvem: Sincronização manual iniciada!", icon="☁️")
+            st.success("Sincronização manual iniciada em segundo plano!")
+            st.rerun()
     
     if novo_sync != sync_atual:
         from datetime import datetime

@@ -25,6 +25,13 @@ def render_auth_ui():
                     
                     if res:
                         if res[0] == 1:
+                            # Geração e persistência da sessão no banco de dados e URL
+                            session_token = str(uuid.uuid4())
+                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            with get_conn() as conn:
+                                conn.execute("INSERT OR REPLACE INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (session_token, usr_input, now_str))
+                            st.query_params["session"] = session_token
+
                             st.session_state["autenticado"] = True
                             st.session_state["usuario_atual"] = usr_input
                             st.session_state["perfil_atual"] = res[1]
