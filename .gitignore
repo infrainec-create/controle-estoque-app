@@ -8,3 +8,11 @@ dist/
 .env
 *.csv
 .DS_Store
+
+# Logs
+*.log
+logs/
+
+# Python compiled files / bytecode
+*.pyc
+__pycache__/
