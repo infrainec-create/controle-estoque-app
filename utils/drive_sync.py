@@ -95,7 +95,13 @@ def sincronizar_banco_na_inicializacao():
     Sincroniza o banco local com o banco do Drive no início da sessão.
     Se o banco do Drive for mais recente, realiza o download.
     """
-    # Se a sincronização estiver desativada no banco de dados, não faz nada
+    # 1. Se o banco não existir ou estiver vazio localmente, baixa imediatamente do Drive!
+    # Fazemos isso antes de qualquer get_conn() para impedir que o SQLite crie um arquivo em branco vazio.
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+        descarregar_do_drive()
+        return
+
+    # Se já existe e tem tamanho, agora sim podemos ler configurações de sincronização
     try:
         with get_conn() as conn:
             row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
@@ -112,10 +118,6 @@ def sincronizar_banco_na_inicializacao():
         mtime_drive_str = meta_drive.get('modifiedTime')
         mtime_drive = parsed_drive_time(mtime_drive_str)
         
-        if not os.path.exists(DB_PATH):
-            descarregar_do_drive()
-            return
-            
         mtime_local = obter_local_mtime()
         
         if mtime_drive and mtime_local:
