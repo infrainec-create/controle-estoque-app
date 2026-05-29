@@ -63,7 +63,39 @@ if "db_sincronizado" not in st.session_state:
 # Inicia chaves de sessão na memória
 inicializar_estados_sessao()
 
-# Recuperação de sessão persistente via Token na URL
+# --- CONTROLE DE EXPIRAÇÃO DE SESSÃO POR INATIVIDADE (30 MINUTOS) ---
+import time
+INACTIVITY_TIMEOUT = 1800  # 30 minutos em segundos
+
+if st.session_state.get("autenticado"):
+    agora_ts = time.time()
+    ultimo_acesso = st.session_state.get("ultimo_acesso")
+    
+    if ultimo_acesso:
+        decorrido = agora_ts - ultimo_acesso
+        if decorrido > INACTIVITY_TIMEOUT:
+            # Registrar auditoria do logoff automático
+            registrar_log_auditoria(st.session_state["usuario_atual"], "Sessão Expirada", "Sessão encerrada por inatividade de 30 minutos.")
+            
+            # Deletar sessão persistente se existir na URL
+            session_token = st.query_params.get("session")
+            if session_token:
+                with get_conn() as conn:
+                    conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
+                st.query_params.clear()
+                
+            st.session_state["autenticado"] = False
+            st.session_state["usuario_atual"] = ""
+            st.session_state["perfil_atual"] = ""
+            if "ultimo_acesso" in st.session_state:
+                del st.session_state["ultimo_acesso"]
+            st.warning("⏱️ Sua sessão expirou devido a 30 minutos de inatividade. Faça login novamente.")
+            st.rerun()
+    
+    # Atualiza o timestamp de atividade para a ação atual
+    st.session_state["ultimo_acesso"] = agora_ts
+
+# Recuperação de sessão persistente via Token na URL (Tempo reduzido para 2 horas para maior segurança)
 if not st.session_state["autenticado"]:
     session_token = st.query_params.get("session")
     if session_token:
@@ -74,14 +106,15 @@ if not st.session_state["autenticado"]:
             if sessao:
                 usr, dt_criacao_str = sessao
                 dt_criacao = datetime.strptime(dt_criacao_str, "%Y-%m-%d %H:%M:%S")
-                # Sessão expira em 7 dias
-                if datetime.now() - dt_criacao < timedelta(days=7):
+                # Sessão expira em 2 horas
+                if datetime.now() - dt_criacao < timedelta(hours=2):
                     with get_conn() as conn:
                         res_usr = conn.execute("SELECT aprovado, perfil FROM usuarios WHERE usuario = ?", (usr,)).fetchone()
                     if res_usr and res_usr[0] == 1:
                         st.session_state["autenticado"] = True
                         st.session_state["usuario_atual"] = usr
                         st.session_state["perfil_atual"] = res_usr[1]
+                        st.session_state["ultimo_acesso"] = time.time()
                         st.rerun()
                 else:
                     with get_conn() as conn:
@@ -96,6 +129,12 @@ if not st.session_state["autenticado"]:
 if not st.session_state["autenticado"]:
     render_auth_ui()
 else:
+    # Alerta Proeminente no Topo se a Sincronização falhar ou tiver Conflito
+    with get_conn() as conn:
+        status_row_main = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+    if status_row_main and status_row_main[0] == 0:
+        st.error(f"⚠️ **Alerta de Sincronização:** {status_row_main[1]} (Registrado em: {status_row_main[2]})")
+
     # Sidebar de Informações Operacionais e Logoff
     with st.sidebar:
         st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")

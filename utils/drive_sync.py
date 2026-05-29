@@ -155,36 +155,47 @@ def executar_sincronizacao_drive():
                         )
                     return
         
-        # 2. Upload Seguro do Banco de Dados (.db)
+        # 2. Upload Seguro do Banco de Dados (.db) com Retry (3 tentativas com Backoff)
+        import time
         query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
-        files = servico.files().list(
-            q=query, 
-            fields="files(id)",
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True
-        ).execute().get('files', [])
         
-        media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
-        if files: 
-            upload_res = servico.files().update(
-                fileId=files[0]['id'], 
-                media_body=media,
-                fields="modifiedTime",
-                supportsAllDrives=True
-            ).execute()
-        else: 
-            upload_res = servico.files().create(
-                body={'name': os.path.basename(DB_PATH), 'parents': [FOLDER_ID]}, 
-                media_body=media,
-                fields="modifiedTime",
-                supportsAllDrives=True
-            ).execute()
+        upload_res = None
+        for tentativa in range(3):
+            try:
+                files = servico.files().list(
+                    q=query, 
+                    fields="files(id)",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True
+                ).execute().get('files', [])
+                
+                media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                if files: 
+                    upload_res = servico.files().update(
+                        fileId=files[0]['id'], 
+                        media_body=media,
+                        fields="modifiedTime",
+                        supportsAllDrives=True
+                    ).execute()
+                else: 
+                    upload_res = servico.files().create(
+                        body={'name': os.path.basename(DB_PATH), 'parents': [FOLDER_ID]}, 
+                        media_body=media,
+                        fields="modifiedTime",
+                        supportsAllDrives=True
+                    ).execute()
+                break # Sucesso, sai do loop
+            except Exception as e:
+                if tentativa < 2:
+                    time.sleep(2 ** tentativa)
+                else:
+                    raise e
             
         # Salva o novo timestamp de sincronização localmente
         if upload_res and 'modifiedTime' in upload_res:
             salvar_ultimo_sync_time_local(upload_res['modifiedTime'])
         
-        # 3. Geração e Extração dos CSVs para o Looker Studio
+        # 3. Geração e Extração dos CSVs para o Looker Studio com Retry
         with get_conn() as conn:
             prods = pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
             movs = pd.read_sql("""
@@ -194,25 +205,33 @@ def executar_sincronizacao_drive():
             
         for df, name in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
             q = f"name='{name}' and '{FOLDER_ID}' in parents"
-            fs = servico.files().list(
-                q=q,
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True
-            ).execute().get('files', [])
-            
-            m = MediaIoBaseUpload(BytesIO(df.to_csv(index=False).encode('utf-8-sig')), mimetype='text/csv')
-            if fs: 
-                servico.files().update(
-                    fileId=fs[0]['id'], 
-                    media_body=m,
-                    supportsAllDrives=True
-                ).execute()
-            else: 
-                servico.files().create(
-                    body={'name': name, 'parents': [FOLDER_ID]}, 
-                    media_body=m,
-                    supportsAllDrives=True
-                ).execute()
+            for tentativa in range(3):
+                try:
+                    fs = servico.files().list(
+                        q=q,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True
+                    ).execute().get('files', [])
+                    
+                    m = MediaIoBaseUpload(BytesIO(df.to_csv(index=False).encode('utf-8-sig')), mimetype='text/csv')
+                    if fs: 
+                        servico.files().update(
+                            fileId=fs[0]['id'], 
+                            media_body=m,
+                            supportsAllDrives=True
+                        ).execute()
+                    else: 
+                        servico.files().create(
+                            body={'name': name, 'parents': [FOLDER_ID]}, 
+                            media_body=m,
+                            supportsAllDrives=True
+                        ).execute()
+                    break # Sucesso
+                except Exception as e:
+                    if tentativa < 2:
+                        time.sleep(2 ** tentativa)
+                    else:
+                        raise e
             
         with get_conn() as conn:
             conn.execute(
