@@ -98,7 +98,9 @@ def sincronizar_banco_na_inicializacao():
     # 1. Se o banco não existir ou estiver vazio localmente, baixa imediatamente do Drive!
     # Fazemos isso antes de qualquer get_conn() para impedir que o SQLite crie um arquivo em branco vazio.
     if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
-        descarregar_do_drive()
+        sucesso = descarregar_do_drive()
+        if not sucesso:
+            raise Exception("Não foi possível baixar o banco de dados inicial do Google Drive e não há banco local disponível.")
         return
 
     # Se já existe e tem tamanho, agora sim podemos ler configurações de sincronização
@@ -184,14 +186,14 @@ def executar_sincronizacao_drive():
                     upload_res = servico.files().update(
                         fileId=files[0]['id'], 
                         media_body=media,
-                        fields="modifiedTime",
+                        fields="id, modifiedTime",
                         supportsAllDrives=True
                     ).execute()
                 else: 
                     upload_res = servico.files().create(
                         body={'name': os.path.basename(DB_PATH), 'parents': [FOLDER_ID]}, 
                         media_body=media,
-                        fields="modifiedTime",
+                        fields="id, modifiedTime",
                         supportsAllDrives=True
                     ).execute()
                 break # Sucesso, sai do loop
@@ -204,6 +206,48 @@ def executar_sincronizacao_drive():
         # Salva o novo timestamp de sincronização localmente
         if upload_res and 'modifiedTime' in upload_res:
             salvar_ultimo_sync_time_local(upload_res['modifiedTime'])
+            
+            # Criar cópia de backup rotativo no Drive
+            try:
+                uploaded_file_id = upload_res.get('id')
+                if uploaded_file_id:
+                    backup_name = f"estoque_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                    servico.files().copy(
+                        fileId=uploaded_file_id,
+                        body={'name': backup_name, 'parents': [FOLDER_ID]},
+                        supportsAllDrives=True
+                    ).execute()
+                    
+                    # Lista todos os backups na pasta
+                    query_backups = f"name contains 'estoque_backup_' and '{FOLDER_ID}' in parents and trashed=false"
+                    res_backups = servico.files().list(
+                        q=query_backups,
+                        fields="files(id, name)",
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True
+                    ).execute()
+                    backups = res_backups.get('files', [])
+                    
+                    # Filtra apenas arquivos que seguem o padrão exato estoque_backup_YYYYMMDD_HHMMSS.db
+                    import re
+                    pattern = re.compile(r"^estoque_backup_\d{8}_\d{6}\.db$")
+                    backups_validos = [b for b in backups if pattern.match(b['name'])]
+                    
+                    # Ordena pelo nome (alfabeticamente, que corresponde à ordem cronológica)
+                    backups_validos.sort(key=lambda x: x['name'])
+                    
+                    # Se houver mais de 5, remove os mais antigos
+                    if len(backups_validos) > 5:
+                        for old_backup in backups_validos[:-5]:
+                            try:
+                                servico.files().delete(
+                                    fileId=old_backup['id'],
+                                    supportsAllDrives=True
+                                ).execute()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
         
         # 3. Geração e Extração dos CSVs para o Looker Studio com Retry
         with get_conn() as conn:
@@ -329,11 +373,12 @@ def descarregar_do_drive():
             return True
     except Exception as e:
         try:
-            with get_conn() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                    (f"Erro ao baixar da nuvem: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                )
+            if os.path.exists(DB_PATH):
+                with get_conn() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
+                        (f"Erro ao baixar da nuvem: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                    )
         except:
             pass
         return False

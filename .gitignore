@@ -1,5 +1,5 @@
 .venv/
-estoque.db
+estoque*.db
 estoque.db-shm
 estoque.db-wal
 .streamlit/secrets.toml

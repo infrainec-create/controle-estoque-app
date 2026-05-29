@@ -53,12 +53,40 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO DE BANCO E SESSOES
+# INICIALIZAÇÃO DE BANCO E SESSOES COM RESILIÊNCIA CRÍTICA
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
-    sincronizar_banco_na_inicializacao()
-    init_db()
-    st.session_state["db_sincronizado"] = True
+    try:
+        sincronizar_banco_na_inicializacao()
+        init_db()
+        st.session_state["db_sincronizado"] = True
+    except Exception as e:
+        # Exibe uma tela de bloqueio premium caso não haja banco local e a sincronização com o Drive falhe
+        st.markdown(f"""
+            <div style="text-align: center; padding: 40px; background-color: rgba(255, 75, 75, 0.05); border-radius: 15px; border: 1px solid rgba(255, 75, 75, 0.3); margin-top: 50px;">
+                <h1 style="color: #FF4B4B; font-size: 2.5rem; margin-bottom: 20px;">☁️ Conexão com a Nuvem Indisponível</h1>
+                <p style="font-size: 1.2rem; margin-bottom: 20px; line-height: 1.6;">
+                    Não foi possível encontrar um banco de dados local e o download inicial do Google Drive falhou.
+                </p>
+                <div style="background-color: rgba(0, 0, 0, 0.2); padding: 15px; border-radius: 10px; border-left: 5px solid #FF4B4B; text-align: left; margin: 0 auto; max-width: 600px; font-family: monospace; font-size: 0.95rem;">
+                    <strong>Erro Técnico:</strong><br>
+                    {str(e)}
+                </div>
+                <p style="margin-top: 25px; font-size: 1.05rem;">
+                    Para evitar a criação de um banco de dados em branco (o que poderia sobrescrever seu estoque real), o sistema foi bloqueado por segurança.
+                </p>
+                <p style="font-size: 1rem; color: gray; margin-top: 10px;">
+                    Por favor, verifique suas credenciais de nuvem em <code>secrets.toml</code>, a ID da pasta no Drive ou sua conexão com a internet.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("") # Espaçador
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col2:
+            if st.button("🔄 Tentar Novamente", type="primary"):
+                st.rerun()
+        st.stop()
 
 # Inicia chaves de sessão na memória
 inicializar_estados_sessao()
