@@ -4,15 +4,15 @@ import google.generativeai as genai
 from database.connection import get_conn
 
 def render_ai_assistant_ui(df):
-    st.subheader("🧠 Analista IA de Suprimentos & Auditoria")
+    st.subheader("🧠 Analista IA & Previsão de Demanda WMS 5.0")
     if df.empty:
-        st.info("Cadastre insumos para ativar a análise de Inteligência Artificial.")
+        st.info("Cadastre insumos para ativar o painel preditivo de demanda e a análise de Inteligência Artificial.")
         return
 
     try:
         # Validação segura das credenciais do Gemini
         if "GEMINI_API_KEY" not in st.secrets or st.secrets["GEMINI_API_KEY"] == "sua_chave_gemini_aqui":
-            st.warning("⚠️ O Assistente de IA está inativo. A chave `GEMINI_API_KEY` não está configurada ou possui o valor padrão no arquivo `.streamlit/secrets.toml`. Insira sua chave de API válida para habilitar o chat inteligente.")
+            st.warning("⚠️ O Assistente de IA está inativo. A chave `GEMINI_API_KEY` não está configurada ou possui o valor padrão no arquivo `.streamlit/secrets.toml`. Insira sua chave de API válida para habilitar a inteligência preditiva.")
             return
             
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -33,6 +33,112 @@ def render_ai_assistant_ui(df):
             st.toast("Histórico do chat limpo!", icon="🧹")
             st.rerun()
 
+        # ─────────────────────────────────────────────────────────────
+        # CÁLCULO DAS MÉTRICAS DE PREVISÃO OPERACIONAL E GATILHOS
+        # ─────────────────────────────────────────────────────────────
+        with get_conn() as conn:
+            cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
+            recente_movs = pd.read_sql("""
+                SELECT m.data_hora, p.nome AS produto, m.tipo, m.quantidade, m.saldo_resultante, m.observacao 
+                FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto 
+                ORDER BY m.id DESC LIMIT 10
+            """, conn)
+            
+        cons_dict = dict(cons)
+        df_prev = df.copy()
+        
+        # Consumo mensal (últimos 30 dias) e velocidade diária
+        df_prev['consumo_mensal'] = df_prev['id'].map(cons_dict).fillna(0).astype(int)
+        df_prev['consumo_diario'] = df_prev['consumo_mensal'] / 30.0
+        
+        # Runway (Cobertura de estoque em dias)
+        df_prev['Runway'] = 999
+        mask = df_prev['consumo_diario'] > 0
+        df_prev.loc[mask, 'Runway'] = (df_prev.loc[mask, 'saldo_atual'] / df_prev.loc[mask, 'consumo_diario']).astype(int)
+        
+        # Definição matemática de gatilho de compra
+        def set_gatilho(row):
+            saldo = row['saldo_atual']
+            runway = row['Runway']
+            lead = row['lead_time']
+            minimo = row['estoque_minimo']
+            
+            if saldo <= 0:
+                return "🚨 RUPTURA (Saldo Zero)"
+            if saldo < minimo or (runway != 999 and runway <= lead):
+                return "⚠️ COMPRA URGENTE"
+            if runway != 999 and runway <= (lead + 3):
+                return "🟠 COMPRA PREVENTIVA"
+            return "🟢 ADEQUADO"
+            
+        df_prev['Gatilho'] = df_prev.apply(set_gatilho, axis=1)
+        
+        # Sugestão de quantidade a comprar para cobrir 30 dias
+        def calc_sugestao(row):
+            gatilho = row['Gatilho']
+            if "🟢 ADEQUADO" in gatilho:
+                return 0
+            cd = row['consumo_diario']
+            saldo = row['saldo_atual']
+            minimo = row['estoque_minimo']
+            alvo = int((30 * cd) + minimo)
+            sugerido = max(0, alvo - saldo)
+            return int(sugerido)
+            
+        df_prev['Sugerido'] = df_prev.apply(calc_sugestao, axis=1)
+
+        # ─────────────────────────────────────────────────────────────
+        # RENDERIZAÇÃO DO EXPANDER DE PREVISÃO DE DEMANDA
+        # ─────────────────────────────────────────────────────────────
+        with st.expander("🔮 **Painel de Previsão de Demanda & Gatilhos de Compras WMS 5.0**", expanded=True):
+            st.caption("Cálculo preditivo em tempo real com base no ritmo médio de consumo (últimos 30 dias) e lead time de fornecedores.")
+            
+            df_display = df_prev.copy()
+            df_display['Runway_Txt'] = df_display['Runway'].apply(lambda x: "Sem consumo recente" if x == 999 else f"{x} dias")
+            df_display['consumo_diario_txt'] = df_display['consumo_diario'].apply(lambda x: f"{x:.2f} un/dia")
+            df_display['sugerido_txt'] = df_display['Sugerido'].apply(lambda x: "Estoque OK" if x <= 0 else f"Comprar {x} un")
+            
+            df_display = df_display.rename(columns={
+                "nome": "Insumo",
+                "categoria": "Setor",
+                "saldo_atual": "Saldo Atual",
+                "lead_time": "Lead Time (Forn.)",
+                "consumo_diario_txt": "Velocidade Consumo",
+                "Runway_Txt": "Cobertura (Runway)",
+                "Gatilho": "Status de Gatilho",
+                "sugerido_txt": "Sugestão de Reposição"
+            })
+            
+            # Formatação visual colorida da tabela preditiva
+            def style_gatilho(row):
+                gatilho = row['Status de Gatilho']
+                color = ''
+                if "🚨" in gatilho:
+                    color = 'background-color: rgba(239, 68, 68, 0.08); color: #ef4444; font-weight: bold;'
+                elif "⚠️" in gatilho:
+                    color = 'background-color: rgba(245, 158, 11, 0.08); color: #f59e0b; font-weight: bold;'
+                elif "🟠" in gatilho:
+                    color = 'background-color: rgba(59, 130, 246, 0.08); color: #3b82f6;'
+                else:
+                    color = 'background-color: rgba(16, 185, 129, 0.08); color: #10b981;'
+                return [color if col == 'Status de Gatilho' else '' for col in row.index]
+                
+            df_styled = df_display[["Setor", "Insumo", "Saldo Atual", "Velocidade Consumo", "Lead Time (Forn.)", "Cobertura (Runway)", "Status de Gatilho", "Sugestão de Reposição"]].style.apply(style_gatilho, axis=1)
+            st.dataframe(df_styled, use_container_width=True, hide_index=True)
+            
+            st.markdown("""
+            💡 **Entendendo os Gatilhos Preditivos:**
+            * `🚨 RUPTURA`: Insumo totalmente esgotado no estoque real. Reposição imediata obrigatória.
+            * `⚠️ COMPRA URGENTE`: O saldo atual caiu abaixo do estoque mínimo de segurança **OU** o tempo que você tem de estoque (Runway) é menor que o tempo de entrega do fornecedor (Lead Time).
+            * `🟠 COMPRA PREVENTIVA`: O item está com cobertura extra muito próxima ao tempo de entrega do fornecedor (margem de segurança de 3 dias).
+            """)
+
+        # ─────────────────────────────────────────────────────────────
+        # HISTÓRICO E CHAT COM O ASSISTENTE IA
+        # ─────────────────────────────────────────────────────────────
+        st.write("---")
+        st.markdown("### 💬 Assistente de Suporte à Decisão & Chat de Auditoria")
+        
         # Inicializa o histórico de chat se não existir
         if "gemini_chat_history" not in st.session_state:
             st.session_state["gemini_chat_history"] = []
@@ -42,62 +148,40 @@ def render_ai_assistant_ui(df):
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # --- GERAÇÃO DE CONTEXTO EM TEMPO REAL ---
-        with get_conn() as conn:
-            cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
-            recente_movs = pd.read_sql("""
-                SELECT m.data_hora, p.nome AS produto, m.tipo, m.quantidade, m.observacao 
-                FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto 
-                ORDER BY m.id DESC LIMIT 10
-            """, conn)
-            
-        cons_dict = dict(cons)
+        # Contexto operacional injetado de forma estruturada para o Gemini
+        posicao_estoque_md = df_prev[['Gatilho', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'Runway', 'Sugerido']].rename(columns={
+            'nome': 'Insumo', 'categoria': 'Setor', 'saldo_atual': 'Saldo', 'estoque_minimo': 'Minimo', 'lead_time': 'LeadTime_Dias', 'Sugerido': 'SugestaoComprar'
+        }).to_markdown(index=False)
         
-        # Prepara estatísticas detalhadas de Runway
-        df_context = df.copy()
-        df_context['consumo_mensal'] = df_context['id'].map(cons_dict).fillna(0).astype(int)
-        df_context['consumo_diario'] = df_context['consumo_mensal'] / 30
-        mask = df_context['consumo_diario'] > 0
-        df_context['Runway'] = 999
-        df_context.loc[mask, 'Runway'] = (df_context.loc[mask, 'saldo_atual'] / df_context.loc[mask, 'consumo_diario']).astype(int)
-        df_context['Cobertura'] = df_context['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
-        
-        def set_status(row):
-            if row['saldo_atual'] <= 0: return '🔴 Ruptura'
-            if row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
-            if row['Runway'] != 999 and row['Runway'] <= row['lead_time']: return '🟠 Risco'
-            return '🟢 OK'
-        df_context['Status'] = df_context.apply(set_status, axis=1)
+        movimentacoes_recente_md = recente_movs.to_markdown(index=False) if not recente_movs.empty else "Nenhuma movimentação registrada no histórico."
 
-        posicao_estoque_md = df_context[['Status', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'valor_unitario', 'Cobertura']].to_markdown(index=False)
-        movimentacoes_recente_md = recente_movs.to_markdown(index=False) if not recente_movs.empty else "Nenhuma movimentação física registrada no WMS."
-
-        # Contexto operacional injetado na IA
         system_context = f"""
-        Você é o Analista Inteligente Sênior do WMS 4.0, responsável pela gestão e auditoria de um Almoxarifado Interno de Insumos (uso interno).
-        Seu objetivo é auxiliar o operador a planejar compras, gerenciar coberturas, detectar riscos de rupturas de estoque e responder dúvidas de auditoria com precisão absoluta.
+        Você é o Analista Logístico Preditivo Sênior do WMS 5.0, responsável pela inteligência de suprimentos de um Almoxarifado de Insumos.
+        Seu objetivo principal é guiar o operador na tomada de decisões estratégicas de compras, otimização de estoque, mitigação de riscos de ruptura e auditoria.
         
-        Abaixo está o retrato em tempo real do sistema:
-        
-        POSIÇÃO DE ESTOQUE ATUAL:
+        POSIÇÃO DE ESTOQUE ATUAL & MÉTRICAS PREDITIVAS CALCULADAS (Runway = Dias de Cobertura, SugestaoComprar = Sugestão de Reposição):
         {posicao_estoque_md}
         
         ÚLTIMAS 10 MOVIMENTAÇÕES DE REGISTRO HISTÓRICO:
         {movimentacoes_recente_md}
         
         Instruções de resposta:
-        1. Responda em bom português brasileiro, de forma clara, altamente analítica e concisa.
-        2. Utilize tabelas em markdown e marcadores para estruturar recomendações logísticas.
-        3. Você está dialogando diretamente com um operador interno do WMS. Seja prestativo e profissional.
+        1. Responda em português brasileiro de forma altamente técnica, clara e extremamente concisa.
+        2. Utilize tabelas markdown e listas com marcadores para estruturar diagnósticos e recomendações.
+        3. Você está dialogando diretamente com o Gestor/Administrador do WMS. Seja analítico e profissional.
         """
 
-        # --- AÇÕES RÁPIDAS (BOTOEIRA DE DIAGNÓSTICO) ---
-        gerar_diagnostico = st.button("✨ Girar Diagnóstico Logístico Completo", type="secondary", use_container_width=True)
-        
+        # --- AÇÕES RÁPIDAS (BOTOEIRA PREDITIVA) ---
+        c_act1, c_act2 = st.columns(2)
+        with c_act1:
+            gerar_diagnostico = st.button("✨ Girar Diagnóstico Geral do Almoxarifado", type="secondary", use_container_width=True)
+        with c_act2:
+            gerar_plano_compras = st.button("🔮 Gerar Plano de Compras Preditivo (IA)", type="primary", use_container_width=True)
+            
         if gerar_diagnostico:
-            st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere um Diagnóstico Logístico Completo do Almoxarifado."})
+            st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere um Diagnóstico Geral do Almoxarifado."})
             with st.chat_message("user"):
-                st.write("Gere um Diagnóstico Logístico Completo do Almoxarifado.")
+                st.write("Gere um Diagnóstico Geral do Almoxarifado.")
                 
             with st.chat_message("assistant"):
                 with st.spinner("Analisando dados logísticos..."):
@@ -105,9 +189,30 @@ def render_ai_assistant_ui(df):
                     {system_context}
                     
                     Por favor, elabore um Diagnóstico Logístico estratégico contendo:
-                    1. **Análise de Saúde do Estoque**: Uma visão do estado geral do inventário.
-                    2. **Riscos Imediatos**: Alertas sobre itens em ruptura (saldo zero) ou críticos (abaixo do mínimo de segurança) antes de estourar o lead time.
-                    3. **Plano de Ação de Reposição**: Recomendações urgentes de compras com quantidades sugeridas.
+                    1. **Análise de Saúde do Estoque**: Uma visão do estado geral do inventário do WMS 5.0.
+                    2. **Riscos Imediatos**: Alertas sobre itens críticos ou em ruptura física de saldo.
+                    3. **Sugestões Operacionais**: Dicas para melhorar o giro físico de materiais.
+                    """
+                    mod = genai.GenerativeModel(modelo_selecionado)
+                    resposta = mod.generate_content(prompt).text
+                    st.markdown(resposta)
+                    st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
+            st.rerun()
+
+        if gerar_plano_compras:
+            st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere o Plano de Ação de Compras Preditivo."})
+            with st.chat_message("user"):
+                st.write("Gere o Plano de Ação de Compras Preditivo.")
+                
+            with st.chat_message("assistant"):
+                with st.spinner("Compilando previsões e lead times..."):
+                    prompt = f"""
+                    {system_context}
+                    
+                    Por favor, elabore um Plano Estratégico de Compras Preditivo contendo:
+                    1. **Gargalos Operacionais**: Quais setores de suprimentos exigem compras imediatas baseadas nos lead times.
+                    2. **Sugestão de Pedido de Compra**: Uma tabela markdown detalhada com: Insumo, Quantidade Recomendada (com base no 'SugestaoComprar'), Justificativa Preditiva (relação de Runway vs Lead Time) e Prioridade de Compra (Alta/Média/Baixa).
+                    3. **Avisos de Abastecimento**: Alertas sobre itens com fornecedores lentos que necessitam de compras antecipadas permanentes.
                     """
                     mod = genai.GenerativeModel(modelo_selecionado)
                     resposta = mod.generate_content(prompt).text
@@ -116,7 +221,7 @@ def render_ai_assistant_ui(df):
             st.rerun()
 
         # --- CHAT INPUT ---
-        user_query = st.chat_input("Pergunte algo sobre estoque ou reposição...")
+        user_query = st.chat_input("Pergunte algo sobre previsões de demanda, compras ou auditoria...")
 
         if user_query:
             st.session_state["gemini_chat_history"].append({"role": "user", "content": user_query})
@@ -124,11 +229,11 @@ def render_ai_assistant_ui(df):
                 st.markdown(user_query)
 
             with st.chat_message("assistant"):
-                with st.spinner("O Analista IA está respondendo..."):
+                with st.spinner("O Analista IA está processando..."):
                     # Compila histórico da conversa para manter a coerência do chat
                     historico_conversa = ""
                     for msg in st.session_state["gemini_chat_history"][-6:-1]: # Pega as últimas 5 mensagens
-                        role_label = "Operador" if msg["role"] == "user" else "Analista WMS"
+                        role_label = "Gestor" if msg["role"] == "user" else "Analista WMS"
                         historico_conversa += f"{role_label}: {msg['content']}\n"
 
                     prompt = f"""

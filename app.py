@@ -22,7 +22,7 @@ from components.config_ui import render_config_ui
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO SEGURO
 # ─────────────────────────────────────────────────────────────
-st.set_page_config(page_title="WMS 4.0 - Alta Performance", page_icon="📦", layout="wide")
+st.set_page_config(page_title="WMS 5.0", page_icon="📦", layout="wide")
 
 st.markdown("""
     <style>

@@ -6,7 +6,7 @@ from database.connection import get_conn
 
 def render_dashboard_ui(df):
     if df.empty:
-        st.info("📦 **Bem-vindo ao WMS 4.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
+        st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
         return
 
     # Cálculos Logísticos

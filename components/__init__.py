@@ -1,1 +1,1 @@
-# Pacote de Componentes de UI do WMS 4.0
+# Pacote de Componentes de UI do WMS 5.0

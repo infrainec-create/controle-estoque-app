@@ -188,6 +188,85 @@ def render_config_ui(df):
             disparar_sincronizacao()
         st.rerun()
 
+    # ─────────────────────────────────────────────────────────────
+    # CENTRAL DE EXPORTAÇÕES PREMIUM WMS 5.0
+    # ─────────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📥 Central de Relatórios Premium WMS 5.0")
+    st.caption("Gere e exporte planilhas profissionais no formato Excel (.xlsx) e relatórios executivos em alta definição formatados para impressão em PDF.")
+    
+    from utils.reports import gerar_excel_estoque, gerar_excel_movimentacoes, gerar_excel_auditoria, gerar_html_pdf_estoque
+    from database.queries import listar_movimentacoes
+    from datetime import datetime
+    
+    col_rep1, col_rep2 = st.columns(2)
+    
+    with col_rep1:
+        st.markdown("**📊 Planilhas Analíticas Excel (.xlsx)**")
+        # 1. Estoque Atual (Valuation)
+        try:
+            excel_estoque_bytes = gerar_excel_estoque(df)
+            st.download_button(
+                label="📥 Baixar Posição de Estoque & Valuation (.xlsx)",
+                data=excel_estoque_bytes,
+                file_name=f"valuation_estoque_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        except Exception as e_rep:
+            st.error(f"Erro ao gerar relatório de estoque: {e_rep}")
+            
+        # 2. Extrato de Movimentações
+        try:
+            mv_df = listar_movimentacoes()
+            excel_movs_bytes = gerar_excel_movimentacoes(mv_df)
+            st.download_button(
+                label="📥 Baixar Extrato de Movimentações (.xlsx)",
+                data=excel_movs_bytes,
+                file_name=f"extrato_movimentacoes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        except Exception as e_rep:
+            st.error(f"Erro ao gerar extrato: {e_rep}")
+            
+        # 3. Logs de Auditoria
+        try:
+            with get_conn() as conn:
+                logs_raw = pd.read_sql("SELECT * FROM logs_auditoria ORDER BY id DESC", conn)
+            excel_logs_bytes = gerar_excel_auditoria(logs_raw)
+            st.download_button(
+                label="📥 Baixar Auditoria Geral de Logs (.xlsx)",
+                data=excel_logs_bytes,
+                file_name=f"auditoria_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        except Exception as e_rep:
+            st.error(f"Erro ao gerar logs: {e_rep}")
+            
+    with col_rep2:
+        st.markdown("**📄 Relatório Executivo PDF/Imprimir**")
+        st.write("Compila a posição completa de estoque e as 10 movimentações recentes em um layout premium de folha A4 com seções de assinatura técnica de auditoria.")
+        
+        try:
+            mv_df_head = listar_movimentacoes()
+            with get_conn() as conn:
+                logs_raw = pd.read_sql("SELECT * FROM logs_auditoria ORDER BY id DESC", conn)
+            html_report = gerar_html_pdf_estoque(df, mv_df_head, logs_raw)
+            
+            st.download_button(
+                label="📥 Baixar Relatório Executivo Premium (HTML/PDF)",
+                data=html_report,
+                file_name=f"relatorio_executivo_wms_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                mime="text/html",
+                use_container_width=True,
+                type="primary"
+            )
+            st.caption("💡 *Ao abrir o arquivo baixado no navegador, aperte **Ctrl+P** (ou Cmd+P no Mac) para salvá-lo como um PDF profissional diagramado em formato A4.*")
+        except Exception as e_rep:
+            st.error(f"Erro ao compilar PDF HTML: {e_rep}")
+
     # --- HISTÓRICO GERAL DE AUDITORIA ---
     st.divider()
     st.markdown("### 📜 Painel de Auditoria e Histórico Geral de Operações")
