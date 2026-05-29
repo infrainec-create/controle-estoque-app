@@ -131,11 +131,11 @@ def render_config_ui(df):
         row_cfg = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
         sync_atual = (row_cfg[0] == '1') if row_cfg else True
         
-    col_tgl, col_btn = st.columns([3, 2])
+    col_tgl, col_btn1, col_btn2 = st.columns([2, 2, 2])
     with col_tgl:
-        novo_sync = st.toggle("Ativar sincronização automática em segundo plano", value=sync_atual)
-    with col_btn:
-        if st.button("🔄 Sincronizar Agora (Manual)", type="secondary", use_container_width=True):
+        novo_sync = st.toggle("Sincronizar em segundo plano", value=sync_atual)
+    with col_btn1:
+        if st.button("📤 Enviar para Nuvem", type="secondary", use_container_width=True):
             from datetime import datetime
             import threading
             from utils.drive_sync import executar_sincronizacao_drive
@@ -148,10 +148,23 @@ def render_config_ui(df):
             
             # Executa a sincronização em segundo plano usando Thread
             threading.Thread(target=executar_sincronizacao_drive).start()
-            registrar_log_auditoria(st.session_state["usuario_atual"], "Sincronização Manual", "Disparou sincronização manual com o Google Drive.")
-            st.toast("Nuvem: Sincronização manual iniciada!", icon="☁️")
-            st.success("Sincronização manual iniciada em segundo plano!")
+            registrar_log_auditoria(st.session_state["usuario_atual"], "Sincronização Manual", "Disparou upload manual com o Google Drive.")
+            st.toast("Nuvem: Upload iniciado!", icon="☁️")
+            st.success("Sincronização de envio iniciada!")
             st.rerun()
+            
+    with col_btn2:
+        if st.button("📥 Baixar da Nuvem", type="primary", use_container_width=True):
+            from utils.drive_sync import descarregar_do_drive
+            with st.spinner("Baixando base de dados do Drive..."):
+                sucesso = descarregar_do_drive()
+            if sucesso:
+                registrar_log_auditoria(st.session_state["usuario_atual"], "Restaurar Backup Nuvem", "Forçou download manual do banco de dados do Google Drive.")
+                st.toast("Nuvem: Banco baixado com sucesso!", icon="☁️")
+                st.success("Banco de dados baixado e atualizado na tela!")
+                st.rerun()
+            else:
+                st.error("Erro ao baixar o banco da nuvem. Verifique o status na barra lateral.")
     
     if novo_sync != sync_atual:
         from datetime import datetime
