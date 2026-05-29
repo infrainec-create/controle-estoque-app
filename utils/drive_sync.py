@@ -157,6 +157,14 @@ def executar_sincronizacao_drive():
                         )
                     return
         
+        # Forçar o checkpoint do SQLite (WAL -> estoque.db) para garantir que todas as transações recentes
+        # sejam persistidas no arquivo principal antes do upload do arquivo para o Google Drive.
+        try:
+            with get_conn() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
         # 2. Upload Seguro do Banco de Dados (.db) com Retry (3 tentativas com Backoff)
         import time
         query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
