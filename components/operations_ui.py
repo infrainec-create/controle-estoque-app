@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
+from database.queries import registrar_log_auditoria
 
 def render_operations_ui(df):
     st.subheader("⬇️ Registrar Entrada ou 📤 Registrar Saída")
@@ -34,6 +35,10 @@ def render_operations_ui(df):
                     data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                     obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
                     conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
+                
+                detalhes_log = f"Registrou entrada de {qe} un. do insumo '{sel_e}' (PMP anterior: R$ {pmp_antigo:.2f}, novo PMP: R$ {novo_pmp:.2f}). Preço Pago: R$ {preco_compra:.2f}/un. Total: R$ {qe * preco_compra:.2f}."
+                registrar_log_auditoria(st.session_state["usuario_atual"], "Entrada de Estoque", detalhes_log)
+                
                 disparar_sincronizacao()
                 st.toast(f"📥 Entrada registrada! Novo PMP: R$ {novo_pmp:.2f}", icon="✅")
                 st.rerun()
@@ -71,6 +76,10 @@ def render_operations_ui(df):
                     conn.execute("UPDATE produtos SET saldo_atual = saldo_atual - ? WHERE id = ?", (q, id_p))
                     data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
                     conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
+                
+                detalhes_log = f"Registrou saída de {q} un. do insumo '{sel}' (Observação: '{obs_s}'). Saldo restante: {max_s - q} un."
+                registrar_log_auditoria(st.session_state["usuario_atual"], "Saída de Estoque", detalhes_log)
+                
                 disparar_sincronizacao()
                 st.toast(f"📤 Baixa realizada com sucesso!", icon="🚀")
                 st.rerun()

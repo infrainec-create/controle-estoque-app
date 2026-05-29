@@ -6,9 +6,9 @@ import streamlit as st
 # ─────────────────────────────────────────────────────────────
 from database.connection import get_conn, DB_PATH
 from database.schema import init_db
-from database.queries import listar_produtos, listar_movimentacoes
+from database.queries import listar_produtos, listar_movimentacoes, registrar_log_auditoria
 from utils.security import inicializar_estados_sessao
-from utils.drive_sync import descarregar_do_drive, FOLDER_ID
+from utils.drive_sync import descarregar_do_drive, FOLDER_ID, sincronizar_banco_na_inicializacao
 
 # Importações de Componentes Visuais de UI
 from components.auth_ui import render_auth_ui
@@ -56,8 +56,7 @@ st.markdown("""
 # INICIALIZAÇÃO DE BANCO E SESSOES
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
-    if not os.path.exists(DB_PATH):
-        descarregar_do_drive()
+    sincronizar_banco_na_inicializacao()
     init_db()
     st.session_state["db_sincronizado"] = True
 
@@ -102,6 +101,8 @@ else:
         st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
         st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
         if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
+            # Registrar log de auditoria antes de limpar a sessão
+            registrar_log_auditoria(st.session_state["usuario_atual"], "Logoff no Sistema", "Operador encerrou a sessão manualmente.")
             # Deletar sessão persistente se existir
             session_token = st.query_params.get("session")
             if session_token:

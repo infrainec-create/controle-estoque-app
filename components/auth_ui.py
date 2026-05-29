@@ -4,6 +4,7 @@ import streamlit as st
 from database.connection import get_conn
 from utils.security import gerar_hash_senha
 from utils.drive_sync import disparar_sincronizacao
+from database.queries import registrar_log_auditoria
 
 def render_auth_ui():
     st.title("🔒 WMS Inteligente - Controle de Acesso")
@@ -35,6 +36,8 @@ def render_auth_ui():
                             st.session_state["autenticado"] = True
                             st.session_state["usuario_atual"] = usr_input
                             st.session_state["perfil_atual"] = res[1]
+                            
+                            registrar_log_auditoria(usr_input, "Login no Sistema", f"Operador realizou login com sucesso. Perfil: {res[1]}.")
                             
                             st.toast(f"Bem-vindo de volta, {usr_input}!", icon="👋")
                             st.rerun()
@@ -70,6 +73,9 @@ def render_auth_ui():
                                 "INSERT INTO usuarios (usuario, senha_hash, pergunta_seguranca, resposta_seguranca_hash, aprovado, perfil) VALUES (?, ?, ?, ?, ?, ?)",
                                 (new_usr, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(resposta), status_inicial, perfil_inicial)
                             )
+                        
+                        registrar_log_auditoria(new_usr if status_inicial == 1 else "Sistema", "Solicitação de Cadastro", f"Solicitação de cadastro enviada para o usuário '{new_usr}' (Perfil inicial: {perfil_inicial}, Aprovado: {'Sim' if status_inicial == 1 else 'Não'}).")
+                        
                         disparar_sincronizacao()
                         if status_inicial == 1:
                             st.success("👑 Conta de administrador master criada! Vá para a aba Entrar e realize o login.")
@@ -102,6 +108,9 @@ def render_auth_ui():
                         if verif:
                             with get_conn() as conn:
                                 conn.execute("UPDATE usuarios SET senha_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), usr_recup))
+                            
+                            registrar_log_auditoria(usr_recup, "Recuperação de Senha", f"Usuário '{usr_recup}' redefiniu sua senha de acesso via pergunta de segurança.")
+                            
                             disparar_sincronizacao()
                             st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
                         else:

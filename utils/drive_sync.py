@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 import pandas as pd
 import streamlit as st
@@ -34,11 +34,128 @@ def obter_servico_drive():
     except Exception as e:
         raise Exception(f"Falha ao interpretar arquivo PEM: {e}")
 
+def parsed_drive_time(iso_str):
+    if not iso_str:
+        return None
+    if iso_str.endswith('Z'):
+        iso_str = iso_str[:-1] + '+00:00'
+    try:
+        return datetime.fromisoformat(iso_str)
+    except Exception:
+        try:
+            return datetime.strptime(iso_str.split(".")[0], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+def obter_local_mtime():
+    if os.path.exists(DB_PATH):
+        mtime = os.path.getmtime(DB_PATH)
+        return datetime.fromtimestamp(mtime, tz=timezone.utc)
+    return None
+
+def obter_metadados_drive():
+    try:
+        servico = obter_servico_drive()
+        query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
+        res = servico.files().list(
+            q=query, 
+            fields="files(id, name, modifiedTime, size)",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True
+        ).execute()
+        files = res.get('files', [])
+        if files:
+            return files[0]
+    except Exception:
+        pass
+    return None
+
+def salvar_ultimo_sync_time_local(mtime_drive_str):
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('ultimo_sync_drive_mtime', ?)",
+                (mtime_drive_str,)
+            )
+    except Exception:
+        pass
+
+def obter_ultimo_sync_time_local():
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'ultimo_sync_drive_mtime'").fetchone()
+            if row:
+                return row[0]
+    except Exception:
+        pass
+    return None
+
+def sincronizar_banco_na_inicializacao():
+    """
+    Sincroniza o banco local com o banco do Drive no início da sessão.
+    Se o banco do Drive for mais recente, realiza o download.
+    """
+    # Se a sincronização estiver desativada no banco de dados, não faz nada
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
+            if row and row[0] == '0':
+                return
+    except Exception:
+        pass
+
+    try:
+        meta_drive = obter_metadados_drive()
+        if not meta_drive:
+            return
+            
+        mtime_drive_str = meta_drive.get('modifiedTime')
+        mtime_drive = parsed_drive_time(mtime_drive_str)
+        
+        if not os.path.exists(DB_PATH):
+            descarregar_do_drive()
+            return
+            
+        mtime_local = obter_local_mtime()
+        
+        if mtime_drive and mtime_local:
+            # Se o banco do Drive for mais recente por mais de 2 segundos, baixa
+            if (mtime_drive - mtime_local).total_seconds() > 2:
+                descarregar_do_drive()
+    except Exception as e:
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
+                    (f"Erro na sincronização de inicialização: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+        except Exception:
+            pass
+
 def executar_sincronizacao_drive():
     try:
         servico = obter_servico_drive()
         
-        # 1. Upload Seguro do Banco de Dados (.db)
+        # 1. Verificação de Conflitos para evitar sobrescrever dados mais recentes da nuvem
+        meta_drive = obter_metadados_drive()
+        if meta_drive:
+            mtime_drive_str = meta_drive.get('modifiedTime')
+            ultimo_sync_local = obter_ultimo_sync_time_local()
+            
+            if ultimo_sync_local and mtime_drive_str != ultimo_sync_local:
+                mtime_drive = parsed_drive_time(mtime_drive_str)
+                mtime_local_sync = parsed_drive_time(ultimo_sync_local)
+                
+                # Se o arquivo na nuvem é mais recente do que a última sincronização que este cliente fez
+                if mtime_drive and mtime_local_sync and (mtime_drive - mtime_local_sync).total_seconds() > 2:
+                    with get_conn() as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
+                            ("Conflito detectado! O banco de dados na nuvem foi modificado por outra sessão. Recarregue a página ou faça download manual.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                        )
+                    return
+        
+        # 2. Upload Seguro do Banco de Dados (.db)
         query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
         files = servico.files().list(
             q=query, 
@@ -49,19 +166,25 @@ def executar_sincronizacao_drive():
         
         media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
         if files: 
-            servico.files().update(
+            upload_res = servico.files().update(
                 fileId=files[0]['id'], 
                 media_body=media,
+                fields="modifiedTime",
                 supportsAllDrives=True
             ).execute()
         else: 
-            servico.files().create(
+            upload_res = servico.files().create(
                 body={'name': os.path.basename(DB_PATH), 'parents': [FOLDER_ID]}, 
                 media_body=media,
+                fields="modifiedTime",
                 supportsAllDrives=True
             ).execute()
+            
+        # Salva o novo timestamp de sincronização localmente
+        if upload_res and 'modifiedTime' in upload_res:
+            salvar_ultimo_sync_time_local(upload_res['modifiedTime'])
         
-        # 2. Geração e Extração dos CSVs para o Looker Studio
+        # 3. Geração e Extração dos CSVs para o Looker Studio
         with get_conn() as conn:
             prods = pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
             movs = pd.read_sql("""
@@ -105,7 +228,7 @@ def executar_sincronizacao_drive():
     except Exception as e:
         msg = str(e)
         if "storageQuotaExceeded" in msg or "do not have storage quota" in msg:
-            msg = "Cota de armazenamento excedida. Contas de Serviço GCP não possuem cota própria no Drive pessoal. Para resolver, certifique-se de estar utilizando um 'Drive Compartilhado' (Shared Drive) do Google Workspace com acesso de Colaborador para a conta de serviço, ou mude para autenticação via OAuth 2.0."
+            msg = "Cota de armazenamento excedida. Contas de Serviço GCP não possuem cota própria no Drive pessoal. Use um Drive Compartilhado ou configure OAuth 2.0."
             
         with get_conn() as conn:
             conn.execute(
@@ -116,7 +239,6 @@ def executar_sincronizacao_drive():
 def disparar_sincronizacao():
     st.cache_data.clear()
     
-    # Verifica se a sincronização está ativa no banco de dados
     try:
         with get_conn() as conn:
             row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
@@ -142,17 +264,48 @@ def descarregar_do_drive():
         query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
         res = servico.files().list(
             q=query, 
-            fields="files(id)",
+            fields="files(id, modifiedTime)",
             includeItemsFromAllDrives=True,
             supportsAllDrives=True
         ).execute()
         if res.get('files', []):
-            req = servico.files().get_media(fileId=res['files'][0]['id'])
-            with open(DB_PATH, "wb") as f:
+            file_meta = res['files'][0]
+            req = servico.files().get_media(fileId=file_meta['id'])
+            
+            temp_path = DB_PATH + ".tmp"
+            with open(temp_path, "wb") as f:
                 load = MediaIoBaseDownload(f, req)
                 done = False
-                while not done: _, done = load.next_chunk()
+                while not done: 
+                    _, done = load.next_chunk()
+            
+            if os.path.exists(DB_PATH):
+                os.remove(DB_PATH)
+            os.rename(temp_path, DB_PATH)
+            
+            for suffix in ["-wal", "-shm"]:
+                extra_file = DB_PATH + suffix
+                if os.path.exists(extra_file):
+                    try: os.remove(extra_file)
+                    except: pass
+            
+            salvar_ultimo_sync_time_local(file_meta.get('modifiedTime'))
+            
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Banco de dados baixado da nuvem com sucesso!", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+            st.cache_data.clear()
             return True
-    except: 
+    except Exception as e:
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
+                    (f"Erro ao baixar da nuvem: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+        except:
+            pass
         return False
     return False

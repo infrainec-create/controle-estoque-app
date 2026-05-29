@@ -177,11 +177,56 @@ def render_config_ui(df):
 
     # --- HISTÓRICO GERAL DE AUDITORIA ---
     st.divider()
-    st.markdown("### 📜 Histórico Geral de Auditoria WMS")
+    st.markdown("### 📜 Painel de Auditoria e Histórico Geral de Operações")
+    st.caption("Filtragem avançada de todas as movimentações e ações de segurança executadas pelos operadores no WMS.")
+    
     with get_conn() as conn:
         logs_df = pd.read_sql("SELECT data_hora AS [Data/Hora], usuario AS [Operador], acao AS [Ação], detalhes AS [Detalhes] FROM logs_auditoria ORDER BY id DESC", conn)
     
     if not logs_df.empty:
-        st.dataframe(logs_df, use_container_width=True, hide_index=True)
+        # Colunas de Filtro
+        col_filtro1, col_filtro2 = st.columns([1, 1])
+        
+        with col_filtro1:
+            busca = st.text_input("🔍 Buscar no histórico (Operador, Detalhes):", "").strip()
+            
+        with col_filtro2:
+            acoes_disponiveis = sorted(list(logs_df["Ação"].unique()))
+            filtro_acoes = st.multiselect("🏷️ Filtrar por Ações:", acoes_disponiveis, default=[])
+            
+        # Aplicação dos Filtros
+        df_filtrado = logs_df.copy()
+        
+        if busca:
+            df_filtrado = df_filtrado[
+                df_filtrado["Operador"].str.contains(busca, case=False, na=False) |
+                df_filtrado["Detalhes"].str.contains(busca, case=False, na=False)
+            ]
+            
+        if filtro_acoes:
+            df_filtrado = df_filtrado[df_filtrado["Ação"].isin(filtro_acoes)]
+            
+        # Estilização Condicional das Linhas
+        def destacar_acoes(row):
+            acao = row['Ação']
+            color = ''
+            if acao in ['Entrada de Estoque', 'Aprovar Operador']:
+                color = 'background-color: rgba(16, 185, 129, 0.08); color: #10b981; font-weight: bold;'
+            elif acao in ['Saída de Estoque', 'Excluir Insumo', 'Recusar Operador']:
+                color = 'background-color: rgba(239, 68, 68, 0.08); color: #ef4444; font-weight: bold;'
+            elif acao in ['Ajuste de Inventário']:
+                color = 'background-color: rgba(245, 158, 11, 0.08); color: #f59e0b; font-weight: bold;'
+            elif 'Senha' in acao or 'Login' in acao or 'Logoff' in acao:
+                color = 'background-color: rgba(59, 130, 246, 0.08); color: #3b82f6;'
+            else:
+                color = 'color: #94a3b8;'
+            return [color if col == 'Ação' else '' for col in row.index]
+
+        if not df_filtrado.empty:
+            styled_df = df_filtrado.style.apply(destacar_acoes, axis=1)
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+            st.caption(f"Exibindo {len(df_filtrado)} de {len(logs_df)} registros encontrados.")
+        else:
+            st.warning("⚠️ Nenhum registro encontrado para os filtros aplicados.")
     else:
-        st.info("Nenhuma ação administrativa registrada no histórico de auditoria ainda.")
+        st.info("Nenhuma ação registrada no histórico de auditoria ainda.")
