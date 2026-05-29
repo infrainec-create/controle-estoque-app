@@ -207,46 +207,73 @@ def executar_sincronizacao_drive():
         if upload_res and 'modifiedTime' in upload_res:
             salvar_ultimo_sync_time_local(upload_res['modifiedTime'])
             
-            # Criar cópia de backup rotativo no Drive
+            # Criar cópia de backup rotativo no Drive usando slots pré-criados (evita cota 0 bytes da Conta de Serviço)
             try:
-                uploaded_file_id = upload_res.get('id')
-                if uploaded_file_id:
-                    backup_name = f"estoque_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-                    servico.files().copy(
-                        fileId=uploaded_file_id,
-                        body={'name': backup_name, 'parents': [FOLDER_ID]},
+                # 1. Determinar o próximo slot de backup (1 a 5)
+                ultimo_slot = 1
+                try:
+                    with get_conn() as conn:
+                        row_slot = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'ultimo_backup_slot'").fetchone()
+                        if row_slot:
+                            ultimo_slot = int(row_slot[0])
+                except Exception:
+                    pass
+                
+                next_slot = (ultimo_slot % 5) + 1
+                backup_name = f"estoque_backup_{next_slot}.db"
+                
+                # 2. Procurar se o arquivo do slot já existe na pasta do Drive
+                query_slot = f"name='{backup_name}' and '{FOLDER_ID}' in parents and trashed=false"
+                res_slot = servico.files().list(
+                    q=query_slot,
+                    fields="files(id)",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True
+                ).execute().get('files', [])
+                
+                if res_slot:
+                    # Slot já existe (criado pelo usuário), então atualizamos ele (consumindo cota do usuário)
+                    media_backup = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                    servico.files().update(
+                        fileId=res_slot[0]['id'],
+                        media_body=media_backup,
                         supportsAllDrives=True
                     ).execute()
                     
-                    # Lista todos os backups na pasta
-                    query_backups = f"name contains 'estoque_backup_' and '{FOLDER_ID}' in parents and trashed=false"
-                    res_backups = servico.files().list(
-                        q=query_backups,
-                        fields="files(id, name)",
-                        includeItemsFromAllDrives=True,
-                        supportsAllDrives=True
-                    ).execute()
-                    backups = res_backups.get('files', [])
-                    
-                    # Filtra apenas arquivos que seguem o padrão exato estoque_backup_YYYYMMDD_HHMMSS.db
-                    import re
-                    pattern = re.compile(r"^estoque_backup_\d{8}_\d{6}\.db$")
-                    backups_validos = [b for b in backups if pattern.match(b['name'])]
-                    
-                    # Ordena pelo nome (alfabeticamente, que corresponde à ordem cronológica)
-                    backups_validos.sort(key=lambda x: x['name'])
-                    
-                    # Se houver mais de 5, remove os mais antigos
-                    if len(backups_validos) > 5:
-                        for old_backup in backups_validos[:-5]:
-                            try:
-                                servico.files().delete(
-                                    fileId=old_backup['id'],
-                                    supportsAllDrives=True
-                                ).execute()
-                            except Exception:
-                                pass
-            except Exception:
+                    # Salva o slot atualizado localmente
+                    with get_conn() as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('ultimo_backup_slot', ?)",
+                            (str(next_slot),)
+                        )
+                else:
+                    # Se não existe no Drive pessoal, tentamos criar.
+                    # Se der erro de cota (o que acontece em contas de serviço sem shared drives), alertamos o usuário
+                    try:
+                        media_backup = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                        servico.files().create(
+                            body={'name': backup_name, 'parents': [FOLDER_ID]},
+                            media_body=media_backup,
+                            supportsAllDrives=True
+                        ).execute()
+                        
+                        with get_conn() as conn:
+                            conn.execute(
+                                "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('ultimo_backup_slot', ?)",
+                                (str(next_slot),)
+                            )
+                    except Exception as e_create:
+                        if "storageQuotaExceeded" in str(e_create) or "quota" in str(e_create).lower():
+                            # Não quebramos o fluxo, mas instruímos o usuário a criar o arquivo no Drive dele
+                            with get_conn() as conn:
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('backup_warning', 0, ?, ?)",
+                                    (f"Aviso de Backup: Crie um arquivo vazio chamado '{backup_name}' no seu Google Drive pessoal para ativar este slot de backup.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                                )
+                        else:
+                            raise e_create
+            except Exception as e_backup:
+                # Falhas na rotina de backup secundária não devem travar a sincronização principal
                 pass
         
         # 3. Geração e Extração dos CSVs para o Looker Studio com Retry
@@ -285,6 +312,8 @@ def executar_sincronizacao_drive():
                     if tentativa < 2:
                         time.sleep(2 ** tentativa)
                     else:
+                        if "storageQuotaExceeded" in str(e) or "quota" in str(e).lower():
+                            raise Exception(f"Cota Excedida. Por favor, crie um arquivo vazio chamado '{name}' na sua pasta do Drive para ativar a gravação.")
                         raise e
             
         with get_conn() as conn:
@@ -301,7 +330,7 @@ def executar_sincronizacao_drive():
     except Exception as e:
         msg = str(e)
         if "storageQuotaExceeded" in msg or "do not have storage quota" in msg:
-            msg = "Cota de armazenamento excedida. Contas de Serviço GCP não possuem cota própria no Drive pessoal. Use um Drive Compartilhado ou configure OAuth 2.0."
+            msg = "Cota de armazenamento excedida. Contas de Serviço GCP não possuem cota própria no Drive pessoal. Crie arquivos em branco ou use um Drive Compartilhado."
             
         with get_conn() as conn:
             conn.execute(
