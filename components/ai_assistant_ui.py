@@ -143,10 +143,12 @@ def render_ai_assistant_ui(df):
         if "gemini_chat_history" not in st.session_state:
             st.session_state["gemini_chat_history"] = []
 
-        # Renderiza mensagens anteriores do histórico
-        for msg in st.session_state["gemini_chat_history"]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+        # Container de Chat com Rolagem Vertical Fixa (Melhor UX)
+        chat_container = st.container(height=450)
+        with chat_container:
+            for msg in st.session_state["gemini_chat_history"]:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
 
         # Contexto operacional injetado de forma estruturada para o Gemini
         posicao_estoque_md = df_prev[['Gatilho', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'Runway', 'Sugerido']].rename(columns={
@@ -180,44 +182,46 @@ def render_ai_assistant_ui(df):
             
         if gerar_diagnostico:
             st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere um Diagnóstico Geral do Almoxarifado."})
-            with st.chat_message("user"):
-                st.write("Gere um Diagnóstico Geral do Almoxarifado.")
-                
-            with st.chat_message("assistant"):
-                with st.spinner("Analisando dados logísticos..."):
-                    prompt = f"""
-                    {system_context}
+            with chat_container:
+                with st.chat_message("user"):
+                    st.write("Gere um Diagnóstico Geral do Almoxarifado.")
                     
-                    Por favor, elabore um Diagnóstico Logístico estratégico contendo:
-                    1. **Análise de Saúde do Estoque**: Uma visão do estado geral do inventário do WMS 5.0.
-                    2. **Riscos Imediatos**: Alertas sobre itens críticos ou em ruptura física de saldo.
-                    3. **Sugestões Operacionais**: Dicas para melhorar o giro físico de materiais.
-                    """
-                    mod = genai.GenerativeModel(modelo_selecionado)
-                    resposta = mod.generate_content(prompt).text
-                    st.markdown(resposta)
-                    st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
+                with st.chat_message("assistant"):
+                    with st.spinner("Analisando dados logísticos..."):
+                        prompt = f"""
+                        {system_context}
+                        
+                        Por favor, elabore um Diagnóstico Logístico estratégico contendo:
+                        1. **Análise de Saúde do Estoque**: Uma visão do estado geral do inventário do WMS 5.0.
+                        2. **Riscos Imediatos**: Alertas sobre itens críticos ou em ruptura física de saldo.
+                        3. **Sugestões Operacionais**: Dicas para melhorar o giro físico de materiais.
+                        """
+                        mod = genai.GenerativeModel(modelo_selecionado)
+                        resposta = mod.generate_content(prompt).text
+                        st.markdown(resposta)
+                        st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
             st.rerun()
 
         if gerar_plano_compras:
             st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere o Plano de Ação de Compras Preditivo."})
-            with st.chat_message("user"):
-                st.write("Gere o Plano de Ação de Compras Preditivo.")
-                
-            with st.chat_message("assistant"):
-                with st.spinner("Compilando previsões e lead times..."):
-                    prompt = f"""
-                    {system_context}
+            with chat_container:
+                with st.chat_message("user"):
+                    st.write("Gere o Plano de Ação de Compras Preditivo.")
                     
-                    Por favor, elabore um Plano Estratégico de Compras Preditivo contendo:
-                    1. **Gargalos Operacionais**: Quais setores de suprimentos exigem compras imediatas baseadas nos lead times.
-                    2. **Sugestão de Pedido de Compra**: Uma tabela markdown detalhada com: Insumo, Quantidade Recomendada (com base no 'SugestaoComprar'), Justificativa Preditiva (relação de Runway vs Lead Time) e Prioridade de Compra (Alta/Média/Baixa).
-                    3. **Avisos de Abastecimento**: Alertas sobre itens com fornecedores lentos que necessitam de compras antecipadas permanentes.
-                    """
-                    mod = genai.GenerativeModel(modelo_selecionado)
-                    resposta = mod.generate_content(prompt).text
-                    st.markdown(resposta)
-                    st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
+                with st.chat_message("assistant"):
+                    with st.spinner("Compilando previsões e lead times..."):
+                        prompt = f"""
+                        {system_context}
+                        
+                        Por favor, elabore um Plano Estratégico de Compras Preditivo contendo:
+                        1. **Gargalos Operacionais**: Quais setores de suprimentos exigem compras imediatas baseadas nos lead times.
+                        2. **Sugestão de Pedido de Compra**: Uma tabela markdown detalhada com: Insumo, Quantidade Recomendada (com base no 'SugestaoComprar'), Justificativa Preditiva (relação de Runway vs Lead Time) e Prioridade de Compra (Alta/Média/Baixa).
+                        3. **Avisos de Abastecimento**: Alertas sobre itens com fornecedores lentos que necessitam de compras antecipadas permanentes.
+                        """
+                        mod = genai.GenerativeModel(modelo_selecionado)
+                        resposta = mod.generate_content(prompt).text
+                        st.markdown(resposta)
+                        st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
             st.rerun()
 
         # --- CHAT INPUT ---
@@ -225,30 +229,31 @@ def render_ai_assistant_ui(df):
 
         if user_query:
             st.session_state["gemini_chat_history"].append({"role": "user", "content": user_query})
-            with st.chat_message("user"):
-                st.markdown(user_query)
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(user_query)
 
-            with st.chat_message("assistant"):
-                with st.spinner("O Analista IA está processando..."):
-                    # Compila histórico da conversa para manter a coerência do chat
-                    historico_conversa = ""
-                    for msg in st.session_state["gemini_chat_history"][-6:-1]: # Pega as últimas 5 mensagens
-                        role_label = "Gestor" if msg["role"] == "user" else "Analista WMS"
-                        historico_conversa += f"{role_label}: {msg['content']}\n"
+                with st.chat_message("assistant"):
+                    with st.spinner("O Analista IA está processando..."):
+                        # Compila histórico da conversa para manter a coerência do chat
+                        historico_conversa = ""
+                        for msg in st.session_state["gemini_chat_history"][-6:-1]: # Pega as últimas 5 mensagens
+                            role_label = "Gestor" if msg["role"] == "user" else "Analista WMS"
+                            historico_conversa += f"{role_label}: {msg['content']}\n"
 
-                    prompt = f"""
-                    {system_context}
-                    
-                    HISTÓRICO DA CONVERSA RECENTE:
-                    {historico_conversa}
-                    
-                    PERGUNTA DO OPERADOR:
-                    {user_query}
-                    """
-                    mod = genai.GenerativeModel(modelo_selecionado)
-                    resposta = mod.generate_content(prompt).text
-                    st.markdown(resposta)
-                    st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
+                        prompt = f"""
+                        {system_context}
+                        
+                        HISTÓRICO DA CONVERSA RECENTE:
+                        {historico_conversa}
+                        
+                        PERGUNTA DO OPERADOR:
+                        {user_query}
+                        """
+                        mod = genai.GenerativeModel(modelo_selecionado)
+                        resposta = mod.generate_content(prompt).text
+                        st.markdown(resposta)
+                        st.session_state["gemini_chat_history"].append({"role": "assistant", "content": resposta})
             st.rerun()
 
     except Exception as e:

@@ -57,6 +57,10 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────
 if "db_sincronizado" not in st.session_state:
     try:
+        # Tenta aplicar FOLDER_ID e credenciais customizadas se presentes na sessão antes de sincronizar
+        if st.session_state.get("folder_id_custom"):
+            import utils.drive_sync as ds
+            ds.FOLDER_ID = st.session_state["folder_id_custom"]
         sincronizar_banco_na_inicializacao()
         init_db()
         st.session_state["db_sincronizado"] = True
@@ -76,15 +80,61 @@ if "db_sincronizado" not in st.session_state:
                     Para evitar a criação de um banco de dados em branco (o que poderia sobrescrever seu estoque real), o sistema foi bloqueado por segurança.
                 </p>
                 <p style="font-size: 1rem; color: gray; margin-top: 10px;">
-                    Por favor, verifique suas credenciais de nuvem em <code>secrets.toml</code>, a ID da pasta no Drive ou sua conexão com a internet.
+                    Por favor, verifique suas credenciais de nuvem em <code>secrets.toml</code>, o ID da pasta ou escolha uma das opções abaixo para prosseguir.
                 </p>
             </div>
         """, unsafe_allow_html=True)
         
         st.write("") # Espaçador
+        c_opt1, c_opt2 = st.columns(2)
+        
+        with c_opt1:
+            st.markdown("### 📴 Modo Offline")
+            st.write("Trabalhe localmente com um banco de dados temporário. A sincronização com a nuvem ficará desativada.")
+            if st.button("🔌 Usar Banco Local Temporário", use_container_width=True):
+                try:
+                    init_db()
+                    st.session_state["db_sincronizado"] = "local"
+                    st.toast("Modo Offline ativado!", icon="🔌")
+                    st.rerun()
+                except Exception as ex_db:
+                    st.error(f"Erro ao inicializar o banco local: {ex_db}")
+                    
+        with c_opt2:
+            st.markdown("### 🔑 Corrigir Credenciais")
+            st.write("Configure as chaves e o ID da pasta do Google Drive em memória para testar a sincronização imediatamente.")
+            
+            with st.popover("⚙️ Configurar Credenciais em Memória", use_container_width=True):
+                st.subheader("Configurações do Google Drive")
+                new_folder_id = st.text_input("Folder ID do Google Drive:", value=st.session_state.get("folder_id_custom", ""))
+                
+                uploaded_json = st.file_uploader("Carregar JSON de Credenciais da Conta de Serviço (GCP):", type=["json"])
+                
+                if st.button("💾 Aplicar e Tentar Conexão", type="primary", use_container_width=True):
+                    if new_folder_id:
+                        st.session_state["folder_id_custom"] = new_folder_id
+                        import utils.drive_sync as ds
+                        ds.FOLDER_ID = new_folder_id
+                        
+                    if uploaded_json is not None:
+                        try:
+                            import json
+                            creds_data = json.load(uploaded_json)
+                            required_keys = ["type", "project_id", "private_key", "client_email"]
+                            if all(k in creds_data for k in required_keys):
+                                st.session_state["gcp_service_account_custom"] = creds_data
+                                st.success("Credenciais do GCP carregadas em memória com sucesso!")
+                            else:
+                                st.error("O arquivo JSON não possui os campos obrigatórios de uma Conta de Serviço Google Cloud.")
+                        except Exception as e_json:
+                            st.error(f"Erro ao ler arquivo JSON: {e_json}")
+                            
+                    st.rerun()
+        
+        st.write("---")
         col1, col2, col3 = st.columns([2, 1, 2])
         with col2:
-            if st.button("🔄 Tentar Novamente", type="primary"):
+            if st.button("🔄 Tentar Novamente", type="primary", use_container_width=True):
                 st.rerun()
         st.stop()
 
@@ -158,10 +208,13 @@ if not st.session_state["autenticado"]:
     render_auth_ui()
 else:
     # Alerta Proeminente no Topo se a Sincronização falhar ou tiver Conflito
-    with get_conn() as conn:
-        status_row_main = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
-    if status_row_main and status_row_main[0] == 0:
-        st.error(f"⚠️ **Alerta de Sincronização:** {status_row_main[1]} (Registrado em: {status_row_main[2]})")
+    if st.session_state.get("db_sincronizado") == "local":
+        st.warning("🔌 **Modo Offline Ativo:** A sincronização com o Google Drive está desativada. As alterações serão salvas localmente apenas.")
+    else:
+        with get_conn() as conn:
+            status_row_main = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+        if status_row_main and status_row_main[0] == 0:
+            st.error(f"⚠️ **Alerta de Sincronização:** {status_row_main[1]} (Registrado em: {status_row_main[2]})")
 
     # Sidebar de Informações Operacionais e Logoff
     with st.sidebar:
@@ -182,18 +235,21 @@ else:
             st.rerun()
             
         # Leitura reativa do status de sincronia assíncrona gravado no SQLite
-        with get_conn() as conn:
-            status_row = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
-        
-        if status_row:
-            sucesso, mensagem, timestamp_str = status_row
-            if sucesso == 1:
-                if "segundo plano" in mensagem:
-                    st.caption(f"⏳ {mensagem}")
+        if st.session_state.get("db_sincronizado") == "local":
+            st.caption("🟡 Sincronização Desativada (Modo Offline)")
+        else:
+            with get_conn() as conn:
+                status_row = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+            
+            if status_row:
+                sucesso, mensagem, timestamp_str = status_row
+                if sucesso == 1:
+                    if "segundo plano" in mensagem:
+                        st.caption(f"⏳ {mensagem}")
+                    else:
+                        st.caption(f"🟢 {mensagem} ({timestamp_str})")
                 else:
-                    st.caption(f"🟢 {mensagem} ({timestamp_str})")
-            else:
-                st.error(f"⚠️ {mensagem} ({timestamp_str})")
+                    st.error(f"⚠️ {mensagem} ({timestamp_str})")
 
     # Carrega DataFrames a partir das queries cacheadas
     df = listar_produtos()

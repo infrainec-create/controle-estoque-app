@@ -88,78 +88,161 @@ def render_dashboard_ui(df):
     st.subheader("📊 Gráficos de Performance e Movimentação")
     df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
     
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("##### 📊 Giro Total (Saídas) por Categoria")
-        giro_setor = df.groupby("categoria")["total"].sum().reset_index().rename(columns={"categoria": "Setor", "total": "Movimentações"})
-        if giro_setor["Movimentações"].sum() > 0:
-            fig_giro = px.bar(
-                giro_setor, 
-                x="Setor", 
-                y="Movimentações", 
-                color="Movimentações",
-                text_auto=True,
-                color_continuous_scale="Viridis"
-            )
-            fig_giro.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig_giro, use_container_width=True)
-        else:
-            st.info("Ainda não há registros de saídas.")
+    g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🎯 Matriz de Risco & Lead Time"])
+    
+    with g_tabs[0]:
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("##### 📊 Giro Total (Saídas) por Categoria")
+            giro_setor = df.groupby("categoria")["total"].sum().reset_index().rename(columns={"categoria": "Setor", "total": "Movimentações"})
+            if giro_setor["Movimentações"].sum() > 0:
+                fig_giro = px.bar(
+                    giro_setor, 
+                    x="Setor", 
+                    y="Movimentações", 
+                    color="Movimentações",
+                    text_auto=True,
+                    color_continuous_scale="Viridis"
+                )
+                fig_giro.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False, coloraxis_showscale=False)
+                st.plotly_chart(fig_giro, use_container_width=True)
+            else:
+                st.info("Ainda não há registros de saídas.")
+                
+        with g2:
+            st.markdown("##### 🏆 Distribuição de Capital Imobilizado por Setor")
+            if df["valor_total"].sum() > 0:
+                valor_setor = df.groupby("categoria")["valor_total"].sum().reset_index().rename(columns={"categoria": "Setor", "valor_total": "Valor Total"})
+                fig_pie = px.pie(
+                    valor_setor, 
+                    values="Valor Total", 
+                    names="Setor", 
+                    hole=0.4,
+                    color_discrete_sequence=px.colors.qualitative.Pastel
+                )
+                fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300)
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("Ainda não há produtos com saldo em estoque.")
+                
+    with g_tabs[1]:
+        st.markdown("##### 🏆 Análise de Parede da Curva ABC")
+        st.caption("A Curva ABC classifica seus insumos pelo valor imobilizado acumulado: Classe A (80% do valor total), Classe B (próximos 15%) e Classe C (restante 5%).")
+        
+        # Calcular Curva ABC
+        df_abc = df.sort_values(by="valor_total", ascending=False).copy()
+        total_valor = df_abc["valor_total"].sum()
+        if total_valor > 0:
+            df_abc["valor_acumulado"] = df_abc["valor_total"].cumsum()
+            df_abc["perc_acumulado"] = (df_abc["valor_acumulado"] / total_valor) * 100
             
-    with g2:
-        st.markdown("##### 🏆 Distribuição de Capital Imobilizado por Setor")
-        if df["valor_total"].sum() > 0:
-            valor_setor = df.groupby("categoria")["valor_total"].sum().reset_index().rename(columns={"categoria": "Setor", "valor_total": "Valor Total"})
-            fig_pie = px.pie(
-                valor_setor, 
-                values="Valor Total", 
-                names="Setor", 
-                hole=0.4,
-                color_discrete_sequence=px.colors.qualitative.Pastel
+            def get_class(row):
+                val = row["perc_acumulado"]
+                if val <= 80: return "Classe A"
+                if val <= 95: return "Classe B"
+                return "Classe C"
+            df_abc["Classe"] = df_abc.apply(get_class, axis=1)
+            
+            # Gráfico de Pareto / Acumulado
+            fig_abc = go.Figure()
+            colors_map = {"Classe A": "#ef4444", "Classe B": "#f59e0b", "Classe C": "#10b859"}
+            bar_colors = df_abc["Classe"].map(colors_map).tolist()
+            
+            fig_abc.add_trace(go.Bar(
+                x=df_abc["nome"],
+                y=df_abc["valor_total"],
+                name="Valor Imobilizado",
+                marker_color=bar_colors,
+                hovertemplate="<b>%{x}</b><br>Valor: R$ %{y:,.2f}<br><extra></extra>"
+            ))
+            
+            fig_abc.add_trace(go.Scatter(
+                x=df_abc["nome"],
+                y=df_abc["perc_acumulado"],
+                name="% Acumulado",
+                yaxis="y2",
+                line=dict(color="#3b82f6", width=3),
+                hovertemplate="<b>%{x}</b><br>Acumulado: %{y:.1f}%<br><extra></extra>"
+            ))
+            
+            fig_abc.update_layout(
+                yaxis=dict(title="Valor Imobilizado (R$)"),
+                yaxis2=dict(title="Percentual Acumulado (%)", overlaying="y", side="right", range=[0, 105]),
+                margin=dict(t=30, b=30, l=10, r=10),
+                height=350,
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
-            fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_abc, use_container_width=True)
+            
+            # Métricas rápidas por Classe ABC
+            col_a, col_b, col_c = st.columns(3)
+            sum_a = df_abc[df_abc["Classe"] == "Classe A"]["valor_total"].sum()
+            sum_b = df_abc[df_abc["Classe"] == "Classe B"]["valor_total"].sum()
+            sum_c = df_abc[df_abc["Classe"] == "Classe C"]["valor_total"].sum()
+            
+            col_a.metric("🔴 Classe A (Giro Crítico)", f"R$ {sum_a:,.2f}", f"{(sum_a/total_valor)*100:.1f}% do capital")
+            col_b.metric("🟡 Classe B (Intermediário)", f"R$ {sum_b:,.2f}", f"{(sum_b/total_valor)*100:.1f}% do capital")
+            col_c.metric("🟢 Classe C (Giro Comum)", f"R$ {sum_c:,.2f}", f"{(sum_c/total_valor)*100:.1f}% do capital")
         else:
-            st.info("Ainda não há produtos com saldo em estoque.")
-    
-    st.divider()
-    
-    # Matriz Scatter de Risco
-    st.markdown("##### 🎯 Matriz Dinâmica de Risco: Cobertura (Runway) vs Tempo de Entrega (Lead Time)")
-    df_scatter = df.copy()
-    df_scatter['Runway_Scatter'] = df_scatter['Runway'].apply(lambda x: 45 if x == 999 else min(x, 45))
-    
-    fig_scatter = px.scatter(
-        df_scatter,
-        x="Runway_Scatter",
-        y="lead_time",
-        color="Status",
-        size=df_scatter["saldo_atual"].clip(lower=8),
-        hover_name="nome",
-        labels={"Runway_Scatter": "Cobertura de Estoque (Dias)", "lead_time": "Tempo de Entrega (Dias)", "Status": "Criticidade"},
-        color_discrete_map={"🔴 Ruptura": "#ef4444", "🔴 Crítico": "#ea580c", "🟠 Risco": "#f59e0b", "🟢 OK": "#10b859"}
-    )
-    
-    fig_scatter.add_trace(
-        go.Scatter(
-            x=[0, 45],
-            y=[0, 45],
-            mode="lines",
-            name="Limite de Ruptura (Runway = Lead Time)",
-            line=dict(color="#ef4444", dash="dash", width=2),
-            showlegend=True
+            st.info("Cadastre valores unitários e saldos maiores que zero para ver a análise da Curva ABC.")
+            
+    with g_tabs[2]:
+        st.markdown("##### 🎯 Matriz Dinâmica de Risco: Cobertura (Runway) vs Tempo de Entrega (Lead Time)")
+        
+        # Matriz Scatter de Risco
+        df_scatter = df.copy()
+        df_scatter['Runway_Scatter'] = df_scatter['Runway'].apply(lambda x: 45 if x == 999 else min(x, 45))
+        
+        fig_scatter = px.scatter(
+            df_scatter,
+            x="Runway_Scatter",
+            y="lead_time",
+            color="Status",
+            size=df_scatter["saldo_atual"].clip(lower=8),
+            hover_name="nome",
+            labels={"Runway_Scatter": "Cobertura de Estoque (Dias)", "lead_time": "Tempo de Entrega (Dias)", "Status": "Criticidade"},
+            color_discrete_map={"🔴 Ruptura": "#ef4444", "🔴 Crítico": "#ea580c", "🟠 Risco": "#f59e0b", "🟢 OK": "#10b859"}
         )
-    )
-    
-    fig_scatter.update_layout(
-        xaxis_range=[0, 48],
-        yaxis_range=[0, 20],
-        margin=dict(t=20, b=20, l=20, r=20),
-        height=350,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    st.plotly_chart(fig_scatter, use_container_width=True)
-
+        
+        fig_scatter.add_trace(
+            go.Scatter(
+                x=[0, 45],
+                y=[0, 45],
+                mode="lines",
+                name="Limite de Ruptura (Runway = Lead Time)",
+                line=dict(color="#ef4444", dash="dash", width=2),
+                showlegend=True
+            )
+        )
+        
+        fig_scatter.update_layout(
+            xaxis_range=[0, 48],
+            yaxis_range=[0, 20],
+            margin=dict(t=20, b=20, l=20, r=20),
+            height=320,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        # Tempo de Entrega médio por setor
+        st.markdown("##### 🚚 Tempo de Entrega (Lead Time) Médio dos Insumos por Setor")
+        df_lead = df.groupby("categoria")["lead_time"].mean().reset_index().rename(columns={"categoria": "Setor", "lead_time": "Lead Time Médio"})
+        if not df_lead.empty and df_lead["Lead Time Médio"].sum() > 0:
+            fig_lead = px.bar(
+                df_lead,
+                x="Setor",
+                y="Lead Time Médio",
+                color="Lead Time Médio",
+                text_auto=".1f",
+                color_continuous_scale="Reds",
+                labels={"Lead Time Médio": "Lead Time Médio (Dias)"}
+            )
+            fig_lead.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=280, coloraxis_showscale=False)
+            st.plotly_chart(fig_lead, use_container_width=True)
+        else:
+            st.info("Cadastre lead times válidos nos produtos para visualizar as médias por setor.")
+            
     st.divider()
     
     # Sugestões de Compra WMS

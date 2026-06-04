@@ -16,10 +16,13 @@ except Exception:
     FOLDER_ID = "MOCK_FOLDER_ID"
 
 def obter_servico_drive():
-    if "gcp_service_account" not in st.secrets:
+    if "gcp_service_account_custom" in st.session_state:
+        info_chaves = dict(st.session_state["gcp_service_account_custom"])
+    elif "gcp_service_account" in st.secrets:
+        info_chaves = dict(st.secrets["gcp_service_account"])
+    else:
         raise Exception("Credenciais do Google Cloud não encontradas no arquivo secrets.toml.")
         
-    info_chaves = dict(st.secrets["gcp_service_account"])
     p_key = info_chaves.get("private_key", "")
     
     if info_chaves.get("project_id") == "seu-projeto-gcp" or "sua_chave_privada_aqui" in p_key:
@@ -341,6 +344,17 @@ def executar_sincronizacao_drive():
 def disparar_sincronizacao():
     st.cache_data.clear()
     
+    if st.session_state.get("db_sincronizado") == "local":
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
+                    ("Modo Offline: Sincronização desativada.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                )
+        except Exception:
+            pass
+        return
+        
     try:
         with get_conn() as conn:
             row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
