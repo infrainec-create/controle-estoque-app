@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import numpy as np
 from database.connection import get_conn
 
 def render_dashboard_ui(df):
@@ -247,8 +248,10 @@ def render_dashboard_ui(df):
     
     # Sugestões de Compra WMS
     st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
-    df_filtrado["Minimo Ideal"] = (df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
-    df_filtrado["Alvo"] = df_filtrado[["estoque_minimo", "Minimo Ideal"]].max(axis=1)
+    # O Mínimo Ideal é o teto do consumo do Lead Time com margem de 20%, garantindo que não seja inferior ao estoque mínimo configurado
+    minimo_calculado = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
+    df_filtrado["Minimo Ideal"] = np.maximum(df_filtrado["estoque_minimo"], minimo_calculado)
+    df_filtrado["Alvo"] = df_filtrado["Minimo Ideal"]
     df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
     
     apenas_compras = st.checkbox("🛒 Mostrar apenas insumos com necessidade de compra urgente")
