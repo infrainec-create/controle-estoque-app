@@ -10,20 +10,94 @@ def render_dashboard_ui(df):
         st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
         return
 
-    # Cálculos Logísticos
+    # 1. Cálculos de Valuation (Valor Total)
     df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
-    
+
+    # 2. Classificação da Curva ABC (baseada no valor total imobilizado)
+    df_abc = df.sort_values(by="valor_total", ascending=False).copy()
+    total_valor = df_abc["valor_total"].sum()
+    classes_map = {}
+    if total_valor > 0:
+        df_abc["valor_acumulado"] = df_abc["valor_total"].cumsum()
+        df_abc["perc_acumulado"] = (df_abc["valor_acumulado"] / total_valor) * 100
+        
+        def get_class(row):
+            val = row["perc_acumulado"]
+            if val <= 80: return "Classe A"
+            if val <= 95: return "Classe B"
+            return "Classe C"
+        df_abc["Classe"] = df_abc.apply(get_class, axis=1)
+        classes_map = dict(zip(df_abc["id"], df_abc["Classe"]))
+    else:
+        classes_map = {id_prod: "Classe C" for id_prod in df["id"]}
+        
+    df["Classe_ABC"] = df["id"].map(classes_map).fillna("Classe C")
+
+    # 3. Controles Logísticos Dinâmicos (Expander no topo do painel)
+    with st.expander("⚙️ Parâmetros Logísticos Avançados (Janela de Consumo & Margem ABC)", expanded=False):
+        col_janela, col_margens = st.columns([1, 2])
+        with col_janela:
+            st.markdown("**📅 Ritmo de Consumo**")
+            janela_dias = st.select_slider(
+                "Janela de análise de saídas:",
+                options=[7, 15, 30, 90, 180],
+                value=30,
+                format_func=lambda x: f"{x} dias"
+            )
+        with col_margens:
+            st.markdown("**🎯 Fatores de Segurança (Curva ABC)**")
+            cm1, cm2, cm3 = st.columns(3)
+            fator_a = cm1.number_input(
+                "Classe A (Crítico)", 
+                min_value=1.0, 
+                max_value=2.0, 
+                value=1.4, 
+                step=0.1, 
+                help="Fator de cobertura para itens Classe A (ex: 1.4 = 40% de margem)"
+            )
+            fator_b = cm2.number_input(
+                "Classe B (Médio)", 
+                min_value=1.0, 
+                max_value=2.0, 
+                value=1.2, 
+                step=0.1, 
+                help="Fator de cobertura para itens Classe B (ex: 1.2 = 20% de margem)"
+            )
+            fator_c = cm3.number_input(
+                "Classe C (Baixo)", 
+                min_value=1.0, 
+                max_value=2.0, 
+                value=1.1, 
+                step=0.1, 
+                help="Fator de cobertura para itens Classe C (ex: 1.1 = 10% de margem)"
+            )
+
+    # 4. Cálculo de Consumo diário baseado na janela temporal selecionada
     with get_conn() as conn:
-        cons = pd.read_sql("""
-            SELECT id_produto, SUM(ABS(quantidade)) as total 
+        movs = pd.read_sql("""
+            SELECT id_produto, data_hora, quantidade
             FROM movimentacoes 
             WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
-            GROUP BY id_produto
         """, conn)
         
-    df = df.merge(cons, left_on='id', right_on='id_produto', how='left').fillna(0)
-    df['consumo_diario'] = df['total'] / 30
+    cons_dict = {}
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
     
+    if not movs.empty:
+        movs['dt'] = pd.to_datetime(movs['data_hora'], format='%d/%m/%Y %H:%M', errors='coerce')
+        agora = datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
+        limite = agora - pd.Timedelta(days=janela_dias)
+        movs_filtradas = movs[movs['dt'] >= limite]
+        
+        if not movs_filtradas.empty:
+            cons = movs_filtradas.groupby('id_produto')['quantidade'].apply(lambda x: x.abs().sum()).reset_index(name='total')
+            cons_dict = dict(zip(cons['id_produto'], cons['total']))
+            
+    df['total'] = df['id'].map(cons_dict).fillna(0)
+    df['consumo_diario'] = df['total'] / janela_dias
+    
+    # 5. Runway e Status
     mask = df['consumo_diario'] > 0
     df['Runway'] = 999
     df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
@@ -48,7 +122,7 @@ def render_dashboard_ui(df):
     c1.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
     c2.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
     c3.markdown(f'<div class="metric-card" style="{card_critico_style}">Itens Críticos/Ruptura<br><b>{itens_criticos}</b></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro Total<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro ({janela_dias}d)<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
 
     st.divider()
     
@@ -248,8 +322,18 @@ def render_dashboard_ui(df):
     
     # Sugestões de Compra WMS
     st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
-    # O Mínimo Ideal é o teto do consumo do Lead Time com margem de 20%, garantindo que não seja inferior ao estoque mínimo configurado
-    minimo_calculado = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * 1.2).astype(int)
+    
+    # Aplica o fator de segurança dinâmico com base na classe ABC configurada
+    def obter_fator(row):
+        classe = row["Classe_ABC"]
+        if classe == "Classe A": return fator_a
+        if classe == "Classe B": return fator_b
+        return fator_c
+        
+    df_filtrado["Fator_Seguranca"] = df_filtrado.apply(obter_fator, axis=1)
+    
+    # O Mínimo Ideal é o teto do consumo do Lead Time com a margem da classe ABC, garantindo que não seja inferior ao estoque mínimo configurado
+    minimo_calculado = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * df_filtrado["Fator_Seguranca"]).astype(int)
     df_filtrado["Minimo Ideal"] = np.maximum(df_filtrado["estoque_minimo"], minimo_calculado)
     df_filtrado["Alvo"] = df_filtrado["Minimo Ideal"]
     df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
