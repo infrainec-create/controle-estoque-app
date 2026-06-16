@@ -185,6 +185,28 @@ class TestWMSRegression(unittest.TestCase):
         self.assertGreater(len(html_pdf), 0, "O HTML de visualização não deveria estar vazio.")
         self.assertIn("Relatório Executivo WMS 5.0", html_pdf, "O título correto do relatório deveria estar contido no HTML.")
 
+    def test_05_date_helpers_crono(self):
+        print("Teste 5: Validando cálculos do cronograma de compras...")
+        import datetime
+        from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega
+        
+        # Testar ciclo de Julho 2026
+        crono = obter_cronograma_mes(2026, 7)
+        self.assertEqual(crono["inicio_analise"], datetime.date(2026, 7, 1))
+        self.assertEqual(crono["data_aprovacao"], datetime.date(2026, 7, 8))
+        self.assertEqual(crono["data_entrega"], datetime.date(2026, 7, 13))
+        
+        # Testar a previsão preditiva
+        hoje = datetime.date(2026, 6, 15)
+        previsao = calcular_previsao_entrega(hoje)
+        self.assertEqual(previsao["mes_alvo"], 7)
+        self.assertEqual(previsao["data_entrega"], datetime.date(2026, 7, 13))
+        
+        # Testar que se hoje for após o prazo limite de solicitação do mês seguinte, vai para o mês subsequente (M+2)
+        hoje_tarde = datetime.date(2026, 6, 28)
+        previsao_tarde = calcular_previsao_entrega(hoje_tarde)
+        self.assertEqual(previsao_tarde["mes_alvo"], 8)
+
 if __name__ == "__main__":
     print("======================================================================")
     print(" INICIANDO BATERIA DE TESTES DE REGRESSÃO DE INTEGRAÇÃO - WMS 5.0 ")

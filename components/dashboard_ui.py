@@ -338,14 +338,31 @@ def render_dashboard_ui(df):
     df_filtrado["Alvo"] = df_filtrado["Minimo Ideal"]
     df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
     
+    # Previsão de entrega baseada nas regras operacionais
+    from utils.date_helpers import calcular_previsao_entrega
+    crono_entrega = calcular_previsao_entrega()
+    data_entrega_str = crono_entrega["data_entrega"].strftime("%d/%m/%Y")
+    
+    df_filtrado["Previsão de Entrega"] = df_filtrado.apply(
+        lambda r: data_entrega_str if r["Sugestão Compra"] > 0 else "Estoque OK",
+        axis=1
+    )
+    
     apenas_compras = st.checkbox("🛒 Mostrar apenas insumos com necessidade de compra urgente")
     df_compras = df_filtrado.copy()
     if apenas_compras:
         df_compras = df_compras[df_compras["Sugestão Compra"] > 0]
         
     st.dataframe(
-        df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra"]].rename(
-            columns={"categoria": "Setor", "nome": "Produto", "lead_time": "Entrega(d)", "saldo_atual": "Saldo", "Sugestão Compra": "Comprar"}
+        df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra", "Previsão de Entrega"]].rename(
+            columns={
+                "categoria": "Setor", 
+                "nome": "Produto", 
+                "lead_time": "Entrega(d)", 
+                "saldo_atual": "Saldo", 
+                "Sugestão Compra": "Comprar",
+                "Previsão de Entrega": "Previsão Entrega"
+            }
         ), 
         hide_index=True, width='stretch'
     )

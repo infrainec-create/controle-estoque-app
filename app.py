@@ -18,6 +18,7 @@ from components.audit_ui import render_audit_ui
 from components.history_ui import render_history_ui
 from components.ai_assistant_ui import render_ai_assistant_ui
 from components.config_ui import render_config_ui
+from components.schedule_ui import render_schedule_ui
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO SEGURO
@@ -256,7 +257,7 @@ else:
     mv = listar_movimentacoes()
     
     # Abas estruturadas conforme perfil do Operador
-    tabs_disponiveis = ["📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "📜 Histórico"]
+    tabs_disponiveis = ["📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "📜 Histórico", "📅 Cronograma"]
     is_admin = st.session_state.get("perfil_atual") == "Administrador"
     
     if is_admin:
@@ -277,8 +278,11 @@ else:
     with abas[3]:
         render_history_ui(df, mv)
         
+    with abas[4]:
+        render_schedule_ui(df)
+        
     if is_admin:
-        with abas[4]:
-            render_ai_assistant_ui(df)
         with abas[5]:
+            render_ai_assistant_ui(df)
+        with abas[6]:
             render_config_ui(df)
