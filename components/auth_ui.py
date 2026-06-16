@@ -20,12 +20,13 @@ def render_auth_ui():
             
             if btn_login:
                 if usr_input and pass_input:
-                    hash_login = gerar_hash_senha(pass_input)
                     with get_conn() as conn:
-                        res = conn.execute("SELECT aprovado, perfil FROM usuarios WHERE usuario = ? AND senha_hash = ?", (usr_input, hash_login)).fetchone()
+                        res = conn.execute("SELECT aprovado, perfil, senha_hash FROM usuarios WHERE usuario = ?", (usr_input,)).fetchone()
                     
-                    if res:
-                        if res[0] == 1:
+                    from utils.security import verificar_e_atualizar_senha
+                    if res and verificar_e_atualizar_senha(usr_input, pass_input, res[2]):
+                        aprovado, perfil, _ = res
+                        if aprovado == 1:
                             # Geração e persistência da sessão no banco de dados e URL
                             session_token = str(uuid.uuid4())
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -35,9 +36,9 @@ def render_auth_ui():
 
                             st.session_state["autenticado"] = True
                             st.session_state["usuario_atual"] = usr_input
-                            st.session_state["perfil_atual"] = res[1]
+                            st.session_state["perfil_atual"] = perfil
                             
-                            registrar_log_auditoria(usr_input, "Login no Sistema", f"Operador realizou login com sucesso. Perfil: {res[1]}.")
+                            registrar_log_auditoria(usr_input, "Login no Sistema", f"Operador realizou login com sucesso. Perfil: {perfil}.")
                             
                             st.toast(f"Bem-vindo de volta, {usr_input}!", icon="👋")
                             st.rerun()
@@ -92,7 +93,7 @@ def render_auth_ui():
         
         if usr_recup:
             with get_conn() as conn:
-                dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado FROM usuarios WHERE usuario = ?", (usr_recup,)).fetchone()
+                dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash FROM usuarios WHERE usuario = ?", (usr_recup,)).fetchone()
             
             if dados_usr:
                 st.info(f"Pergunta de Segurança: **{dados_usr[0]}**")
@@ -101,13 +102,11 @@ def render_auth_ui():
                 
                 if st.button("💾 Gravar Nova Senha"):
                     if resp_recup and nova_senha:
-                        hash_resp = gerar_hash_senha(resp_recup)
-                        with get_conn() as conn:
-                            verif = conn.execute("SELECT usuario FROM usuarios WHERE usuario = ? AND resposta_seguranca_hash = ?", (usr_recup, hash_resp)).fetchone()
-                        
-                        if verif:
+                        from utils.security import verificar_senha
+                        hash_salvo_resp = dados_usr[2]
+                        if verificar_senha(resp_recup, hash_salvo_resp):
                             with get_conn() as conn:
-                                conn.execute("UPDATE usuarios SET senha_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), usr_recup))
+                                conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), usr_recup))
                             
                             registrar_log_auditoria(usr_recup, "Recuperação de Senha", f"Usuário '{usr_recup}' redefiniu sua senha de acesso via pergunta de segurança.")
                             

@@ -57,6 +57,10 @@ def init_db():
                 chave TEXT PRIMARY KEY,
                 valor TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_movimentacoes_id_produto ON movimentacoes(id_produto);
+            CREATE INDEX IF NOT EXISTS idx_movimentacoes_data_hora ON movimentacoes(data_hora);
+            CREATE INDEX IF NOT EXISTS idx_logs_auditoria_usuario ON logs_auditoria(usuario);
+            CREATE INDEX IF NOT EXISTS idx_logs_auditoria_data_hora ON logs_auditoria(data_hora);
         """)
         
         try: conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")

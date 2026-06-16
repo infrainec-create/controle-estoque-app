@@ -14,8 +14,8 @@ def render_audit_ui(df):
 
     hoje = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y")
     with get_conn() as conn:
-        query_hoje = f"SELECT id_produto FROM movimentacoes WHERE tipo = 'Contagem' AND data_hora LIKE '{hoje}%'"
-        contados_hoje_df = pd.read_sql(query_hoje, conn)
+        query_hoje = "SELECT id_produto FROM movimentacoes WHERE tipo = 'Contagem' AND data_hora LIKE ?"
+        contados_hoje_df = pd.read_sql(query_hoje, conn, params=(f"{hoje}%",))
     ids_contados_hoje = contados_hoje_df['id_produto'].tolist()
     
     with st.container(border=True):
@@ -63,12 +63,14 @@ def render_audit_ui(df):
         JOIN produtos p ON p.id = m.id_produto
         WHERE m.tipo = 'Contagem'
     """
+    params = []
     if prod_aud_sel != "Todos os Insumos":
-        query_hist += f" AND p.nome = '{prod_aud_sel}'"
+        query_hist += " AND p.nome = ?"
+        params.append(prod_aud_sel)
     query_hist += " ORDER BY m.id DESC LIMIT 15"
     
     with get_conn() as conn:
-        hist_inv = pd.read_sql(query_hist, conn)
+        hist_inv = pd.read_sql(query_hist, conn, params=params)
     if not hist_inv.empty:
         def cor_divergencia(val):
             if val < 0: return 'color: #ef4444; font-weight: bold;'

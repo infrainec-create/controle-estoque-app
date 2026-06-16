@@ -61,14 +61,24 @@ class TestWMSRegression(unittest.TestCase):
                 except: pass
 
     def test_01_security_hash(self):
-        print("Teste 1: Validando criptografia de senhas (SHA-256)...")
+        print("Teste 1: Validando criptografia de senhas (PBKDF2 com Salt)...")
         senha = "senha_secreta_123"
         hash_1 = gerar_hash_senha(senha)
         hash_2 = gerar_hash_senha(senha)
         
-        self.assertEqual(hash_1, hash_2, "Hashes de mesma senha devem ser idênticos.")
-        self.assertEqual(len(hash_1), 64, "O hash SHA-256 deve possuir exatamente 64 caracteres.")
+        self.assertNotEqual(hash_1, hash_2, "Hashes gerados para a mesma senha devem ser diferentes devido ao salt aleatório.")
+        self.assertTrue(hash_1.startswith("pbkdf2_sha256$"), "O hash gerado deve seguir o formato PBKDF2.")
         self.assertNotEqual(senha, hash_1, "A senha em texto puro não deve ser igual ao hash.")
+        
+        # Teste de verificação compatível
+        from utils.security import verificar_senha
+        self.assertTrue(verificar_senha(senha, hash_1), "O hash deve ser verificado com sucesso.")
+        self.assertFalse(verificar_senha("outra_senha", hash_1), "Uma senha incorreta deve falhar na verificação.")
+        
+        # Teste de retrocompatibilidade com SHA-256 legado
+        import hashlib
+        legacy_hash = hashlib.sha256(senha.encode()).hexdigest()
+        self.assertTrue(verificar_senha(senha, legacy_hash), "A verificação deve aceitar hashes SHA-256 legados.")
 
     def test_02_database_crud(self):
         print("Teste 2: Validando operações de CRUD no Banco de Dados...")
