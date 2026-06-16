@@ -5,6 +5,7 @@ import streamlit as st
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
+from utils.backup import realizar_backup_local
 
 def render_audit_ui(df):
     st.subheader("📋 Auditoria de Inventário Diária/Semanal")
@@ -41,6 +42,7 @@ def render_audit_ui(df):
             detalhes_log = f"Realizou contagem física do insumo '{sel_c}'. Saldo no sistema: {s_sis} un., Físico: {f_cont} un. Divergência: {diff} un."
             registrar_log_auditoria(st.session_state["usuario_atual"], "Ajuste de Inventário", detalhes_log)
             
+            realizar_backup_local()
             disparar_sincronizacao()
             st.toast(f"📋 Inventário gravado!", icon="💾")
             st.rerun()

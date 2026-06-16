@@ -1,0 +1,37 @@
+import os
+import shutil
+import glob
+from datetime import datetime
+from database.connection import DB_PATH
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+
+def realizar_backup_local():
+    """
+    Cria uma cópia física do banco de dados atual na pasta backups/
+    e mantém apenas os 5 backups mais recentes para otimizar espaço em disco.
+    """
+    try:
+        if not os.path.exists(BACKUP_DIR):
+            os.makedirs(BACKUP_DIR)
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"estoque_backup_{timestamp}.db"
+        dest_path = os.path.join(BACKUP_DIR, backup_filename)
+        
+        # Cria cópia física segura
+        shutil.copy2(DB_PATH, dest_path)
+        
+        # Gerenciamento rotativo: listar todos os backups e deletar os mais antigos se passar de 5
+        backups_existentes = sorted(glob.glob(os.path.join(BACKUP_DIR, "estoque_backup_*.db")))
+        if len(backups_existentes) > 5:
+            for b in backups_existentes[:-5]:
+                try:
+                    os.remove(b)
+                except Exception:
+                    pass
+                    
+        return True, dest_path
+    except Exception as e:
+        return False, str(e)

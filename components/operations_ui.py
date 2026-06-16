@@ -4,6 +4,7 @@ import streamlit as st
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
+from utils.backup import realizar_backup_local
 
 def render_operations_ui(df):
     st.subheader("⬇️ Registrar Entrada ou 📤 Registrar Saída")
@@ -39,6 +40,7 @@ def render_operations_ui(df):
                 detalhes_log = f"Registrou entrada de {qe} un. do insumo '{sel_e}' (PMP anterior: R$ {pmp_antigo:.2f}, novo PMP: R$ {novo_pmp:.2f}). Preço Pago: R$ {preco_compra:.2f}/un. Total: R$ {qe * preco_compra:.2f}."
                 registrar_log_auditoria(st.session_state["usuario_atual"], "Entrada de Estoque", detalhes_log)
                 
+                realizar_backup_local()
                 disparar_sincronizacao()
                 st.toast(f"📥 Entrada registrada! Novo PMP: R$ {novo_pmp:.2f}", icon="✅")
                 st.rerun()
@@ -80,6 +82,7 @@ def render_operations_ui(df):
                 detalhes_log = f"Registrou saída de {q} un. do insumo '{sel}' (Observação: '{obs_s}'). Saldo restante: {max_s - q} un."
                 registrar_log_auditoria(st.session_state["usuario_atual"], "Saída de Estoque", detalhes_log)
                 
+                realizar_backup_local()
                 disparar_sincronizacao()
                 st.toast(f"📤 Baixa realizada com sucesso!", icon="🚀")
                 st.rerun()

@@ -36,35 +36,56 @@ def render_config_ui(df):
                     st.rerun()
     else:
         st.success("✅ Nenhuma solicitação de cadastro pendente na fila.")
-        
-    st.divider()
-
-    # --- PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
-    st.markdown("### 👥 Gerenciamento de Usuários Ativos")
+           # --- PAINEL DE GERENCIAMENTO DE USUÁRIOS ATIVOS ---
+    st.markdown("### 👥 Gerenciamento de Usuários Cadastrados")
     with get_conn() as conn:
-        ativos = pd.read_sql("SELECT usuario, perfil FROM usuarios WHERE aprovado = 1", conn)
+        ativos = pd.read_sql("SELECT usuario, perfil, aprovado FROM usuarios WHERE aprovado IN (1, 2)", conn)
     
     if not ativos.empty:
-        col_u1, col_u2, col_u3 = st.columns([2, 2, 2])
+        # Formata para visualização amigável no selectbox
+        def format_usr_opt(usr):
+            row = ativos[ativos["usuario"] == usr].iloc[0]
+            status_txt = "🟢 Ativo" if row["aprovado"] == 1 else "🔴 Suspenso"
+            return f"{usr} ({row['perfil']} - {status_txt})"
+            
+        col_u1, col_u2, col_u3, col_u4 = st.columns([2, 1.5, 1.5, 1.5])
         with col_u1:
-            usr_editar = st.selectbox("Selecione o usuário para gerenciar:", list(ativos["usuario"]), key="usr_edit")
+            usr_editar = st.selectbox("Selecione o usuário para gerenciar:", list(ativos["usuario"]), key="usr_edit", format_func=format_usr_opt)
         
-        perfil_atual_db = ativos[ativos['usuario'] == usr_editar]['perfil'].values[0]
+        user_row = ativos[ativos['usuario'] == usr_editar].iloc[0]
+        perfil_atual_db = user_row['perfil']
+        status_atual_db = user_row['aprovado']
+        
         idx_perfil = 0 if perfil_atual_db == "Operador" else 1
+        idx_status = 0 if status_atual_db == 1 else 1
 
         with col_u2:
             novo_perfil = st.selectbox("Novo Nível de Acesso:", ["Operador", "Administrador"], index=idx_perfil, key="perf_edit")
         with col_u3:
+            novo_status = st.selectbox("Status da Conta:", ["Ativo", "Suspenso"], index=idx_status, key="status_edit")
+        with col_u4:
             st.write("") 
-            if st.button("🔄 Atualizar Perfil", use_container_width=True):
-                if usr_editar == st.session_state["usuario_atual"] and novo_perfil == "Operador":
-                    st.error("⚠️ Operação bloqueada! Você não pode rebaixar a própria conta para evitar perder o acesso à aba de Configurações.")
+            if st.button("🔄 Salvar Alterações", use_container_width=True):
+                status_num = 1 if novo_status == "Ativo" else 2
+                
+                if usr_editar == st.session_state["usuario_atual"]:
+                    if novo_perfil == "Operador" or status_num == 2:
+                        st.error("⚠️ Operação bloqueada! Você não pode suspender ou rebaixar sua própria conta para evitar bloqueios acidentais.")
+                    else:
+                        with get_conn() as conn:
+                            conn.execute("UPDATE usuarios SET perfil = ?, aprovado = ? WHERE usuario = ?", (novo_perfil, status_num, usr_editar))
+                        st.success("Configurações atualizadas!")
+                        st.rerun()
                 else:
                     with get_conn() as conn:
-                        conn.execute("UPDATE usuarios SET perfil = ? WHERE usuario = ?", (novo_perfil, usr_editar))
-                    registrar_log_auditoria(st.session_state["usuario_atual"], "Alterar Perfil", f"Perfil do operador '{usr_editar}' alterado para '{novo_perfil}'.")
+                        conn.execute("UPDATE usuarios SET perfil = ?, aprovado = ? WHERE usuario = ?", (novo_perfil, status_num, usr_editar))
+                    
+                    status_log_txt = "Ativo" if status_num == 1 else "Suspenso"
+                    detalhe_log = f"Perfil de '{usr_editar}' atualizado para '{novo_perfil}' e Status para '{status_log_txt}'."
+                    registrar_log_auditoria(st.session_state["usuario_atual"], "Gerenciamento de Operador", detalhe_log)
+                    
                     disparar_sincronizacao()
-                    st.success(f"Perfil de '{usr_editar}' atualizado para {novo_perfil} com sucesso!")
+                    st.success(f"Alterações salvas para '{usr_editar}' com sucesso!")
                     st.rerun()
                     
     st.divider()
@@ -266,6 +287,48 @@ def render_config_ui(df):
             st.caption("💡 *Ao abrir o arquivo baixado no navegador, aperte **Ctrl+P** (ou Cmd+P no Mac) para salvá-lo como um PDF profissional diagramado em formato A4.*")
         except Exception as e_rep:
             st.error(f"Erro ao compilar PDF HTML: {e_rep}")
+ 
+    # --- ARQUIVAMENTO E LIMPEZA DE LOGS DE AUDITORIA ---
+    st.divider()
+    st.markdown("### 📦 Arquivamento e Limpeza de Histórico de Logs")
+    st.caption("Remova logs antigos para economizar espaço em disco. O sistema gerará um download em CSV do histórico arquivado para compliance.")
+    
+    col_arq1, col_arq2 = st.columns([2, 4])
+    with col_arq1:
+        dias_arquivar = st.number_input("Arquivar logs mais antigos que (dias):", min_value=1, value=90, step=1, key="arq_days")
+    with col_arq2:
+        st.write("")
+        st.write("")
+        with st.popover("⚠️ Executar Arquivamento de Histórico", use_container_width=True):
+            st.warning("Esta ação removerá permanentemente os logs selecionados do banco de dados local. Certifique-se de baixar o arquivo CSV gerado abaixo.")
+            btn_confirmar_arq = st.button("Confirmar Limpeza e Gerar Download", type="primary", use_container_width=True)
+
+    if 'csv_arquivado' not in st.session_state:
+        st.session_state['csv_arquivado'] = None
+    if 'total_arquivado' not in st.session_state:
+        st.session_state['total_arquivado'] = 0
+
+    if btn_confirmar_arq:
+        from database.queries import arquivar_logs_antigos
+        sucesso, conteudo, total_del = arquivar_logs_antigos(dias_arquivar)
+        if sucesso:
+            st.session_state['csv_arquivado'] = conteudo
+            st.session_state['total_arquivado'] = total_del
+            registrar_log_auditoria(st.session_state["usuario_atual"], "Arquivamento de Logs", f"Limpeza de logs anteriores a {dias_arquivar} dias. Total de registros removidos: {total_del}.")
+            disparar_sincronizacao()
+            st.toast(f"📦 {total_del} logs arquivados com sucesso!", icon="✅")
+        else:
+            st.error(f"Erro: {conteudo}")
+
+    if st.session_state['csv_arquivado'] is not None:
+        st.success(f"🎉 Concluído! **{st.session_state['total_arquivado']}** logs antigos foram removidos do banco.")
+        st.download_button(
+            label="📥 Baixar Histórico Arquivado (.csv)",
+            data=st.session_state['csv_arquivado'],
+            file_name=f"arquivamento_logs_wms_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
     # --- HISTÓRICO GERAL DE AUDITORIA ---
     st.divider()

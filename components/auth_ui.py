@@ -42,6 +42,8 @@ def render_auth_ui():
                             
                             st.toast(f"Bem-vindo de volta, {usr_input}!", icon="👋")
                             st.rerun()
+                        elif aprovado == 2:
+                            st.error("🚫 Sua conta está suspensa temporariamente. Entre em contato com o administrador.")
                         else:
                             st.error("⏳ Seu cadastro está pendente de aprovação. Solicite ao administrador a liberação do seu acesso.")
                     else:
