@@ -2,13 +2,23 @@ import os
 import sqlite3
 import time
 
+from contextlib import contextmanager
+
 # Definição absoluta do caminho do banco para evitar duplicidades
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "estoque.db")
 
+@contextmanager
 def get_conn():
     # timeout=30.0 força a conexão a aguardar se o banco estiver ocupado
-    return sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
+    # Habilita a checagem e integridade de chaves estrangeiras (Foreign Keys)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 def retry_db_operation(max_retries=3, delay=0.5):
     """
