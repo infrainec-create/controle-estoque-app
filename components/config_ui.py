@@ -336,14 +336,17 @@ def render_config_ui(df):
     st.caption("Filtragem avançada de todas as movimentações e ações de segurança executadas pelos operadores no WMS.")
     
     with get_conn() as conn:
-        logs_df = pd.read_sql("SELECT data_hora AS [Data/Hora], usuario AS [Operador], acao AS [Ação], detalhes AS [Detalhes] FROM logs_auditoria ORDER BY id DESC", conn)
+        try:
+            logs_df = pd.read_sql("SELECT data_hora AS [Data/Hora], usuario AS [Operador], acao AS [Ação], detalhes AS [Detalhes], ip AS [IP], user_agent AS [Navegador] FROM logs_auditoria ORDER BY id DESC", conn)
+        except Exception:
+            logs_df = pd.read_sql("SELECT data_hora AS [Data/Hora], usuario AS [Operador], acao AS [Ação], detalhes AS [Detalhes] FROM logs_auditoria ORDER BY id DESC", conn)
     
     if not logs_df.empty:
         # Colunas de Filtro
         col_filtro1, col_filtro2 = st.columns([1, 1])
         
         with col_filtro1:
-            busca = st.text_input("🔍 Buscar no histórico (Operador, Detalhes):", "").strip()
+            busca = st.text_input("🔍 Buscar no histórico (Operador, Detalhes, IP):", "").strip()
             
         with col_filtro2:
             acoes_disponiveis = sorted(list(logs_df["Ação"].unique()))
@@ -353,10 +356,15 @@ def render_config_ui(df):
         df_filtrado = logs_df.copy()
         
         if busca:
-            df_filtrado = df_filtrado[
+            filtro_busca = (
                 df_filtrado["Operador"].str.contains(busca, case=False, na=False) |
                 df_filtrado["Detalhes"].str.contains(busca, case=False, na=False)
-            ]
+            )
+            if "IP" in df_filtrado.columns:
+                filtro_busca = filtro_busca | df_filtrado["IP"].str.contains(busca, case=False, na=False)
+            if "Navegador" in df_filtrado.columns:
+                filtro_busca = filtro_busca | df_filtrado["Navegador"].str.contains(busca, case=False, na=False)
+            df_filtrado = df_filtrado[filtro_busca]
             
         if filtro_acoes:
             df_filtrado = df_filtrado[df_filtrado["Ação"].isin(filtro_acoes)]

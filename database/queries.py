@@ -52,15 +52,37 @@ def deletar_produto(id_produto):
 @retry_db_operation()
 def registrar_log_auditoria(usuario, acao, detalhes=""):
     from datetime import datetime
+    import streamlit as st
+    
+    # Rastreamento de metadados de rede/cliente do Streamlit 1.30+
+    client_ip = "127.0.0.1"
+    user_agent = "Desconhecido"
+    try:
+        # st.context está disponível a partir da versão 1.30
+        if hasattr(st, "context"):
+            client_ip = st.context.ip_address or "127.0.0.1"
+            user_agent = st.context.headers.get("User-Agent", "Desconhecido")
+    except Exception:
+        pass
+        
     try:
         with get_conn() as conn:
             conn.execute(
-                "INSERT INTO logs_auditoria (usuario, acao, data_hora, detalhes) VALUES (?, ?, ?, ?)",
-                (usuario, acao, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), detalhes)
+                "INSERT INTO logs_auditoria (usuario, acao, data_hora, detalhes, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)",
+                (usuario, acao, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), detalhes, client_ip, user_agent)
             )
         return True
     except Exception:
-        return False
+        # Fallback caso a tabela logs_auditoria ainda não tenha sido alterada (retrocompatibilidade)
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    "INSERT INTO logs_auditoria (usuario, acao, data_hora, detalhes) VALUES (?, ?, ?, ?)",
+                    (usuario, acao, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), detalhes)
+                )
+            return True
+        except Exception:
+            return False
 
 def arquivar_logs_antigos(dias=90):
     """

@@ -67,6 +67,10 @@ def init_db():
         except: pass
         try: conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
         except: pass
+        try: conn.execute("ALTER TABLE logs_auditoria ADD COLUMN ip TEXT")
+        except: pass
+        try: conn.execute("ALTER TABLE logs_auditoria ADD COLUMN user_agent TEXT")
+        except: pass
         try: conn.execute("UPDATE usuarios SET perfil = 'Administrador' WHERE usuario = 'admin'")
         except: pass
         try:

@@ -51,7 +51,23 @@ def verificar_e_atualizar_senha(usuario, senha_digitada, hash_armazenado):
             pass  # Não quebra o login se falhar ao atualizar o hash
     return valida
 
+def limpar_sessoes_expiradas():
+    """
+    Remove sessões que já expiraram (mais de 2 horas) da base de dados
+    para economizar espaço e evitar lixo no SQLite.
+    """
+    from datetime import datetime, timedelta
+    try:
+        limite = (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        with get_conn() as conn:
+            conn.execute("DELETE FROM sessoes WHERE data_criacao < ?", (limite,))
+    except Exception:
+        pass
+
 def inicializar_estados_sessao():
+    # Executa a limpeza automática de tokens expirados a cada carga da aplicação
+    limpar_sessoes_expiradas()
+    
     if "autenticado" not in st.session_state:
         st.session_state["autenticado"] = False
         st.session_state["usuario_atual"] = ""
