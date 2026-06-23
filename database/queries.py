@@ -126,3 +126,29 @@ def arquivar_logs_antigos(dias=90):
     except Exception as e:
         return False, str(e), 0
 
+def executar_checkpoint_wal():
+    """
+    Força o SQLite a transferir os logs de escrita (-wal) para o banco principal (.db).
+    Ajuda a economizar espaço e evita corrupção de arquivos em desligamentos abruptos.
+    """
+    try:
+        with get_conn() as conn:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+    except Exception:
+        pass
+
+def limpar_cache_consultas():
+    """
+    Invalida de forma granular apenas o cache das consultas de listagem de produtos
+    e movimentações, mantendo outros caches da aplicação intactos. Executa o checkpoint do WAL.
+    """
+    try:
+        listar_produtos.clear()
+    except Exception:
+        pass
+    try:
+        listar_movimentacoes.clear()
+    except Exception:
+        pass
+    executar_checkpoint_wal()
+

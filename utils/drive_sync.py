@@ -9,6 +9,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 from database.connection import get_conn, DB_PATH
+from database.queries import limpar_cache_consultas
 
 try:
     FOLDER_ID = st.secrets["FOLDER_ID"]
@@ -342,7 +343,7 @@ def executar_sincronizacao_drive():
             )
 
 def disparar_sincronizacao():
-    st.cache_data.clear()
+    limpar_cache_consultas()
     
     if st.session_state.get("db_sincronizado") == "local":
         try:
@@ -412,7 +413,7 @@ def descarregar_do_drive():
                     "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
                     ("Banco de dados baixado da nuvem com sucesso!", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
                 )
-            st.cache_data.clear()
+            limpar_cache_consultas()
             return True
     except Exception as e:
         try:
