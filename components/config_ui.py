@@ -68,7 +68,7 @@ def render_config_ui(df):
             if st.button("🔄 Salvar Alterações", use_container_width=True):
                 status_num = 1 if novo_status == "Ativo" else 2
                 
-                if usr_editar == st.session_state["usuario_atual"]:
+                if usr_editar.lower() == st.session_state["usuario_atual"].lower():
                     if novo_perfil == "Operador" or status_num == 2:
                         st.error("⚠️ Operação bloqueada! Você não pode suspender ou rebaixar sua própria conta para evitar bloqueios acidentais.")
                     else:

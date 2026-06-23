@@ -208,6 +208,13 @@ if not st.session_state["autenticado"]:
 if not st.session_state["autenticado"]:
     render_auth_ui()
 else:
+    # Limpeza de segurança para evitar vazamento do token de sessão na URL/barra do navegador
+    if "session" in st.query_params:
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
+
     # Alerta Proeminente no Topo se a Sincronização falhar ou tiver Conflito
     if st.session_state.get("db_sincronizado") == "local":
         st.warning("🔌 **Modo Offline Ativo:** A sincronização com o Google Drive está desativada. As alterações serão salvas localmente apenas.")
