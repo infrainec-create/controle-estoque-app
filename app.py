@@ -29,21 +29,61 @@ st.markdown("""
     <style>
     /* Alinha os botões principais */
     .stButton>button {
-        border-radius: 10px;
+        border-radius: 12px;
         font-weight: 600;
-        height: 3em;
+        height: 3.2em;
         width: 100%;
         margin-top: 10px;
+        transition: all 0.2s ease-in-out;
     }
-    /* Base dos cartões de métricas */
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+    }
+    /* Base dos cartões de métricas Premium */
     .metric-card {
-        padding: 20px;
-        border-radius: 12px;
-        background-color: var(--secondary-background-color);
+        padding: 22px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, var(--secondary-background-color) 0%, rgba(128, 128, 128, 0.03) 100%);
         color: var(--text-color);
-        border: 1px solid rgba(128, 128, 128, 0.1);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid rgba(128, 128, 128, 0.12);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.03);
         margin-bottom: 15px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+    }
+    .metric-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+        border-color: rgba(128, 128, 128, 0.25);
+    }
+    /* Brilho sutil no canto superior-esquerdo */
+    .metric-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 50%);
+        pointer-events: none;
+    }
+    /* Elementos internos do card */
+    .metric-card .card-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-color);
+        opacity: 0.75;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    .metric-card .card-value {
+        font-size: 1.85rem;
+        font-weight: 700;
+        color: var(--text-color);
+        line-height: 1.1;
     }
     .stNumberInput, .stTextInput, .stSelectbox {
         margin-bottom: 10px;

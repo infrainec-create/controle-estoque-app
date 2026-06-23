@@ -5,6 +5,24 @@ import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
 
+def apply_premium_chart_theme(fig, is_dual_axis=False):
+    layout_update = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Source Sans Pro, Inter, sans-serif"),
+        xaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
+        yaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
+    )
+    if is_dual_axis:
+        layout_update["yaxis2"] = dict(
+            gridcolor="rgba(128, 128, 128, 0.04)", 
+            zeroline=False, 
+            overlaying="y", 
+            side="right"
+        )
+    fig.update_layout(**layout_update)
+    return fig
+
 def render_dashboard_ui(df):
     if df.empty:
         st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
@@ -113,16 +131,36 @@ def render_dashboard_ui(df):
 
     itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
     if itens_criticos > 0:
-        card_critico_style = 'background-color: rgba(239, 68, 68, 0.15); border-top: 4px solid #ef4444; color: #ef4444;'
+        card_critico_style = 'border-top: 4px solid #ef4444;'
     else:
-        card_critico_style = 'background-color: rgba(16, 185, 129, 0.15); border-top: 4px solid #10b859; color: #10b859;'
+        card_critico_style = 'border-top: 4px solid #10b859;'
 
     # Cartões de Métricas
     c1, c2, c3, c4 = st.columns([1,1,1,1])
-    c1.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Categorias<br><b>{df["categoria"].nunique()}</b></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Valor Total<br><b>R$ {df["valor_total"].sum():,.2f}</b></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="metric-card" style="{card_critico_style}">Itens Críticos/Ruptura<br><b>{itens_criticos}</b></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="metric-card" style="border-top: 4px solid #0052cc;">Giro ({janela_dias}d)<br><b>{int(df["total"].sum())} un</b></div>', unsafe_allow_html=True)
+    c1.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #3b82f6;">
+            <div class="card-title">📂 Setores</div>
+            <div class="card-value">{df["categoria"].nunique()}</div>
+        </div>
+    ''', unsafe_allow_html=True)
+    c2.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #8b5cf6;">
+            <div class="card-title">💰 Capital Total</div>
+            <div class="card-value">R$ {df["valor_total"].sum():,.2f}</div>
+        </div>
+    ''', unsafe_allow_html=True)
+    c3.markdown(f'''
+        <div class="metric-card" style="{card_critico_style}">
+            <div class="card-title">🚨 Críticos/Rupturas</div>
+            <div class="card-value">{itens_criticos}</div>
+        </div>
+    ''', unsafe_allow_html=True)
+    c4.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #10b859;">
+            <div class="card-title">🔄 Giro ({janela_dias}d)</div>
+            <div class="card-value">{int(df["total"].sum())} un</div>
+        </div>
+    ''', unsafe_allow_html=True)
 
     st.divider()
     
@@ -180,6 +218,7 @@ def render_dashboard_ui(df):
                     color_continuous_scale="Viridis"
                 )
                 fig_giro.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False, coloraxis_showscale=False)
+                apply_premium_chart_theme(fig_giro)
                 st.plotly_chart(fig_giro, use_container_width=True)
             else:
                 st.info("Ainda não há registros de saídas.")
@@ -196,6 +235,7 @@ def render_dashboard_ui(df):
                     color_discrete_sequence=px.colors.qualitative.Pastel
                 )
                 fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300)
+                apply_premium_chart_theme(fig_pie)
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("Ainda não há produtos com saldo em estoque.")
@@ -248,6 +288,7 @@ def render_dashboard_ui(df):
                 showlegend=True,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            apply_premium_chart_theme(fig_abc, is_dual_axis=True)
             st.plotly_chart(fig_abc, use_container_width=True)
             
             # Métricas rápidas por Classe ABC
@@ -298,6 +339,7 @@ def render_dashboard_ui(df):
             height=320,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
+        apply_premium_chart_theme(fig_scatter)
         st.plotly_chart(fig_scatter, use_container_width=True)
         
         # Tempo de Entrega médio por setor
@@ -314,6 +356,7 @@ def render_dashboard_ui(df):
                 labels={"Lead Time Médio": "Lead Time Médio (Dias)"}
             )
             fig_lead.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=280, coloraxis_showscale=False)
+            apply_premium_chart_theme(fig_lead)
             st.plotly_chart(fig_lead, use_container_width=True)
         else:
             st.info("Cadastre lead times válidos nos produtos para visualizar as médias por setor.")
