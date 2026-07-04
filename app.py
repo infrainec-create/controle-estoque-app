@@ -301,6 +301,8 @@ else:
 
     # Carrega DataFrames a partir das queries cacheadas
     df = listar_produtos()
+    if not df.empty and "criticidade" not in df.columns:
+        df["criticidade"] = "Y"
     mv = listar_movimentacoes()
     
     # Abas estruturadas conforme perfil do Operador

@@ -28,6 +28,10 @@ def render_dashboard_ui(df):
         st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
         return
 
+    # Garantir compatibilidade se a coluna de criticidade não existir no dataframe carregado/cacheado
+    if "criticidade" not in df.columns:
+        df["criticidade"] = "Y"
+
     # Carregar fatores de segurança por setor configurados no banco
     fatores_setor = {}
     padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
