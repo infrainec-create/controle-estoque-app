@@ -90,6 +90,11 @@ def init_db():
             conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_antes_fim_sol', '3')")
             conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_uteis_analise', '5')")
             conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_uteis_entrega', '3')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('fator_seguranca_Limpeza', '1.1')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('fator_seguranca_Copa', '1.1')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('fator_seguranca_EPI', '1.2')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('fator_seguranca_Escritório', '1.1')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('fator_seguranca_Geral', '1.1')")
         except Exception:
             pass
         

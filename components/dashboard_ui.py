@@ -28,6 +28,15 @@ def render_dashboard_ui(df):
         st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
         return
 
+    # Carregar fatores de segurança por setor configurados no banco
+    fatores_setor = {}
+    padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
+    with get_conn() as conn:
+        rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
+        for k, v in rows_f:
+            setor_nome = k.replace("fator_seguranca_", "")
+            fatores_setor[setor_nome] = float(v)
+
     # 1. Cálculos de Valuation (Valor Total)
     df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
 
@@ -52,7 +61,7 @@ def render_dashboard_ui(df):
     df["Classe_ABC"] = df["id"].map(classes_map).fillna("Classe C")
 
     # 3. Controles Logísticos Dinâmicos (Expander no topo do painel)
-    with st.expander("⚙️ Parâmetros Logísticos Avançados (Janela de Consumo & Margem ABC)", expanded=False):
+    with st.expander("⚙️ Parâmetros Logísticos Avançados (Janela de Consumo & Coberturas por Setor)", expanded=False):
         col_janela, col_margens = st.columns([1, 2])
         with col_janela:
             st.markdown("**📅 Ritmo de Consumo**")
@@ -63,32 +72,13 @@ def render_dashboard_ui(df):
                 format_func=lambda x: f"{x} dias"
             )
         with col_margens:
-            st.markdown("**🎯 Fatores de Segurança (Curva ABC)**")
-            cm1, cm2, cm3 = st.columns(3)
-            fator_a = cm1.number_input(
-                "Classe A (Crítico)", 
-                min_value=1.0, 
-                max_value=2.0, 
-                value=1.4, 
-                step=0.1, 
-                help="Fator de cobertura para itens Classe A (ex: 1.4 = 40% de margem)"
-            )
-            fator_b = cm2.number_input(
-                "Classe B (Médio)", 
-                min_value=1.0, 
-                max_value=2.0, 
-                value=1.2, 
-                step=0.1, 
-                help="Fator de cobertura para itens Classe B (ex: 1.2 = 20% de margem)"
-            )
-            fator_c = cm3.number_input(
-                "Classe C (Baixo)", 
-                min_value=1.0, 
-                max_value=2.0, 
-                value=1.1, 
-                step=0.1, 
-                help="Fator de cobertura para itens Classe C (ex: 1.1 = 10% de margem)"
-            )
+            st.markdown("**🎯 Fatores de Segurança Ativos por Setor**")
+            st.caption("Margens definidas na aba de Configurações")
+            cols_f = st.columns(5)
+            setores_nomes = ["Limpeza", "Copa", "EPI", "Escritório", "Geral"]
+            for i, s in enumerate(setores_nomes):
+                val_f = fatores_setor.get(s, padroes.get(s, 1.1))
+                cols_f[i].metric(s, f"{val_f}x")
 
     # 4. Cálculo de Consumo diário baseado na janela temporal selecionada
     with get_conn() as conn:
@@ -367,13 +357,11 @@ def render_dashboard_ui(df):
     st.subheader("🛒 Sugestão de Reposição (Cálculo WMS)")
     
     # Aplica o fator de segurança dinâmico com base na classe ABC configurada
-    def obter_fator(row):
-        classe = row["Classe_ABC"]
-        if classe == "Classe A": return fator_a
-        if classe == "Classe B": return fator_b
-        return fator_c
+    def obter_fator_setor(row):
+        cat = row["categoria"]
+        return fatores_setor.get(cat, padroes.get(cat, 1.1))
         
-    df_filtrado["Fator_Seguranca"] = df_filtrado.apply(obter_fator, axis=1)
+    df_filtrado["Fator_Seguranca"] = df_filtrado.apply(obter_fator_setor, axis=1)
     
     # O Mínimo Ideal é o teto do consumo do Lead Time com a margem da classe ABC, garantindo que não seja inferior ao estoque mínimo configurado
     minimo_calculado = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * df_filtrado["Fator_Seguranca"]).astype(int)

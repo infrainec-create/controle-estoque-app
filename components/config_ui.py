@@ -209,6 +209,62 @@ def render_config_ui(df):
             disparar_sincronizacao()
         st.rerun()
 
+    # --- AJUSTE DE FATORES DE SEGURANÇA POR SETOR ---
+    st.divider()
+    st.markdown("### 🎯 Margens de Segurança por Setor (Estoque Mínimo)")
+    st.caption("Parametrizador dos multiplicadores de cobertura (Fatores de Segurança) utilizados para calcular o Estoque Mínimo Ideal e sugestões de compra de cada setor.")
+    
+    setores_sistema = ["Limpeza", "Copa", "EPI", "Escritório", "Geral"]
+    fatores_atuais = {}
+    
+    with get_conn() as conn:
+        rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
+        fatores_atuais = {r[0]: float(r[1]) for r in rows_f}
+        
+    padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
+    for s in setores_sistema:
+        key = f"fator_seguranca_{s}"
+        if key not in fatores_atuais:
+            fatores_atuais[key] = padroes[s]
+            try:
+                with get_conn() as conn:
+                    conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES (?, ?)", (key, str(padroes[s])))
+            except Exception:
+                pass
+                
+    with st.form("form_fatores_setor"):
+        col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+        with col_s1:
+            fat_limp = st.number_input("Limpeza:", min_value=1.0, max_value=2.5, value=fatores_atuais["fator_seguranca_Limpeza"], step=0.1)
+        with col_s2:
+            fat_copa = st.number_input("Copa:", min_value=1.0, max_value=2.5, value=fatores_atuais["fator_seguranca_Copa"], step=0.1)
+        with col_s3:
+            fat_epi = st.number_input("EPI:", min_value=1.0, max_value=2.5, value=fatores_atuais["fator_seguranca_EPI"], step=0.1)
+        with col_s4:
+            fat_escr = st.number_input("Escritório:", min_value=1.0, max_value=2.5, value=fatores_atuais["fator_seguranca_Escritório"], step=0.1)
+        with col_s5:
+            fat_geral = st.number_input("Geral:", min_value=1.0, max_value=2.5, value=fatores_atuais["fator_seguranca_Geral"], step=0.1)
+            
+        if st.form_submit_button("💾 Salvar Fatores de Segurança por Setor", type="primary", use_container_width=True):
+            try:
+                with get_conn() as conn:
+                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'fator_seguranca_Limpeza'", (str(fat_limp),))
+                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'fator_seguranca_Copa'", (str(fat_copa),))
+                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'fator_seguranca_EPI'", (str(fat_epi),))
+                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'fator_seguranca_Escritório'", (str(fat_escr),))
+                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'fator_seguranca_Geral'", (str(fat_geral),))
+                
+                detalhe_log = (f"Atualizou fatores de segurança dos setores: Limpeza={fat_limp}, Copa={fat_copa}, "
+                               f"EPI={fat_epi}, Escritório={fat_escr}, Geral={fat_geral}.")
+                registrar_log_auditoria(st.session_state["usuario_atual"], "Ajustar Cobertura Setores", detalhe_log)
+                
+                disparar_sincronizacao()
+                st.toast("Fatores salvos e sincronizados!", icon="✅")
+                st.success("Margens de segurança por setor salvas com sucesso!")
+                st.rerun()
+            except Exception as e_fat:
+                st.error(f"Erro ao salvar configurações de margens: {e_fat}")
+
     # ─────────────────────────────────────────────────────────────
     # CENTRAL DE EXPORTAÇÕES PREMIUM WMS 5.0
     # ─────────────────────────────────────────────────────────────

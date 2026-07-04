@@ -781,3 +781,130 @@ def gerar_html_pdf_estoque(df, mv, logs):
     </html>
     """
     return html_content
+
+def gerar_html_diagnostico_ia(conteudo_md):
+    """
+    Converte o Markdown do diagnóstico da IA em uma página HTML premium otimizada para salvamento em PDF / Impressão.
+    Utiliza codificação Base64 para tráfego seguro de caracteres especiais e tags.
+    """
+    import base64
+    b64_str = base64.b64encode(conteudo_md.encode('utf-8')).decode('utf-8')
+    
+    html_content = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Relatório de Diagnóstico IA - WMS 5.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {{
+            font-family: 'Source Sans Pro', 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+            padding: 40px;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+        }}
+        .container {{
+            background-color: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.05);
+            padding: 50px;
+            width: 800px;
+            border-top: 8px solid #1e3a8a;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            color: #1e3a8a;
+            font-weight: 700;
+            margin-top: 25px;
+        }}
+        h1 {{ border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }}
+        th, td {{
+            border: 1px solid #e5e7eb;
+            padding: 12px;
+            text-align: left;
+        }}
+        th {{
+            background-color: #f3f4f6;
+            font-weight: bold;
+        }}
+        ul, ol {{
+            line-height: 1.6;
+        }}
+        .header-print {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }}
+        .header-print .info {{
+            text-align: right;
+            font-size: 0.85rem;
+            color: #6b7280;
+        }}
+        @media print {{
+            body {{
+                background-color: #ffffff;
+                padding: 0;
+            }}
+            .container {{
+                box-shadow: none;
+                padding: 0;
+                width: 100%;
+                border-top: none;
+            }}
+            .btn-print {{
+                display: none !important;
+            }}
+        }}
+        .btn-print {{
+            display: inline-block;
+            background-color: #1e3a8a;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 25px;
+            font-size: 0.9rem;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            transition: background-color 0.2s;
+        }}
+        .btn-print:hover {{
+            background-color: #1d4ed8;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="btn-print" onclick="window.print()">🖨️ Imprimir / Salvar em PDF</button>
+        <div class="header-print">
+            <div>
+                <h2 style="margin: 0; color: #1e3a8a;">WMS 5.0</h2>
+                <span style="font-size: 0.85rem; color: #6b7280;">Relatório Preditivo do Assistente de Inteligência Artificial</span>
+            </div>
+            <div class="info">
+                <strong>Data de Emissão:</strong> <span id="data-emissao"></span><br>
+                <strong>Emitido por:</strong> Gestor do Sistema
+            </div>
+        </div>
+        <div id="content"></div>
+    </div>
+    <script>
+        document.getElementById('data-emissao').innerText = new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', {{hour: '2-digit', minute:'2-digit'}});
+        const base64Text = "{b64_str}";
+        const mdText = decodeURIComponent(escape(atob(base64Text)));
+        document.getElementById('content').innerHTML = marked.parse(mdText);
+    </script>
+</body>
+</html>"""
+    return html_content

@@ -193,14 +193,21 @@ def render_schedule_ui(df):
         
     df["Classe_ABC"] = df["id"].map(classes_map).fillna("Classe C")
     
-    # Fatores padrão (1.4 para A, 1.2 para B, 1.1 para C)
-    def obter_fator(row):
-        classe = row["Classe_ABC"]
-        if class_map_val := {"Classe A": 1.4, "Classe B": 1.2, "Classe C": 1.1}.get(classe):
-            return class_map_val
-        return 1.1
+    # Carrega fatores de segurança por setor configurados no banco
+    fatores_setor = {}
+    with get_conn() as conn:
+        rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
+        for k, v in rows_f:
+            setor_nome = k.replace("fator_seguranca_", "")
+            fatores_setor[setor_nome] = float(v)
+            
+    padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
+    
+    def obter_fator_setor(row):
+        cat = row["categoria"]
+        return fatores_setor.get(cat, padroes.get(cat, 1.1))
         
-    df["Fator_Seguranca"] = df.apply(obter_fator, axis=1)
+    df["Fator_Seguranca"] = df.apply(obter_fator_setor, axis=1)
     
     # 1. Determinar o mês/ano de projeção (mês anterior ao ciclo de referência selecionado)
     if mes_c == 1:

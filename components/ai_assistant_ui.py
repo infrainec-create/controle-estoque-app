@@ -207,19 +207,33 @@ def render_ai_assistant_ui(df):
         with c_act2:
             gerar_plano_compras = st.button("🔮 Gerar Plano de Compras Preditivo (IA)", type="primary", use_container_width=True)
             
-        # Botão de exportação do último diagnóstico gerado pela IA
+        # Botões de exportação do último diagnóstico gerado pela IA
         if st.session_state.get("gemini_chat_history"):
             respostas_ia = [m for m in st.session_state["gemini_chat_history"] if m["role"] == "assistant"]
             if respostas_ia:
                 from datetime import datetime
                 ultima_resposta = respostas_ia[-1]["content"]
-                st.download_button(
-                    label="📥 Exportar Último Diagnóstico da IA (.md)",
-                    data=ultima_resposta,
-                    file_name=f"diagnostico_ia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
+                
+                from utils.reports import gerar_html_diagnostico_ia
+                html_relatorio = gerar_html_diagnostico_ia(ultima_resposta)
+                
+                col_exp1, col_exp2 = st.columns(2)
+                with col_exp1:
+                    st.download_button(
+                        label="📥 Exportar em Markdown (.md)",
+                        data=ultima_resposta,
+                        file_name=f"diagnostico_ia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown",
+                        use_container_width=True
+                    )
+                with col_exp2:
+                    st.download_button(
+                        label="🖨️ Exportar para Impressão / PDF (.html)",
+                        data=html_relatorio,
+                        file_name=f"diagnostico_ia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                        mime="text/html",
+                        use_container_width=True
+                    )
             
         if gerar_diagnostico:
             st.session_state["gemini_chat_history"].append({"role": "user", "content": "Gere um Diagnóstico Geral do Almoxarifado."})
