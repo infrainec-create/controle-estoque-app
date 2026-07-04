@@ -43,8 +43,28 @@ def render_ai_assistant_ui(df):
         # ─────────────────────────────────────────────────────────────
         # CÁLCULO DAS MÉTRICAS DE PREVISÃO OPERACIONAL E GATILHOS
         # ─────────────────────────────────────────────────────────────
+        import datetime
+        hoje = datetime.date.today()
+        pattern_atual = f"%/{hoje.month:02d}/{hoje.year}%"
+        
         with get_conn() as conn:
-            cons = conn.execute("SELECT id_produto, SUM(ABS(quantidade)) FROM movimentacoes WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0) GROUP BY id_produto").fetchall()
+            cons = conn.execute("""
+                SELECT id_produto, SUM(ABS(quantidade)) 
+                FROM movimentacoes 
+                WHERE (tipo='Saída' OR (tipo='Contagem' AND quantidade < 0))
+                  AND data_hora LIKE ?
+                GROUP BY id_produto
+            """, (pattern_atual,)).fetchall()
+            
+            # Se não houver consumo no mês atual (ex: início do mês), usa histórico de saídas como fallback
+            if not cons or sum(r[1] for r in cons) == 0:
+                cons = conn.execute("""
+                    SELECT id_produto, SUM(ABS(quantidade)) 
+                    FROM movimentacoes 
+                    WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
+                    GROUP BY id_produto
+                """).fetchall()
+                
             recente_movs = pd.read_sql("""
                 SELECT m.data_hora, p.nome AS produto, m.tipo, m.quantidade, m.saldo_resultante, m.observacao 
                 FROM movimentacoes m JOIN produtos p ON p.id = m.id_produto 

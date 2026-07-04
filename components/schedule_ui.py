@@ -202,25 +202,48 @@ def render_schedule_ui(df):
         
     df["Fator_Seguranca"] = df.apply(obter_fator, axis=1)
     
-    # Simulação de consumo médio nos últimos 30 dias (para calcular consumo diário)
+    # 1. Determinar o mês/ano de projeção (mês anterior ao ciclo de referência selecionado)
+    if mes_c == 1:
+        ano_anterior = ano_c - 1
+        mes_anterior = 12
+    else:
+        ano_anterior = ano_c
+        mes_anterior = mes_c - 1
+        
+    pattern_anterior = f"%/{mes_anterior:02d}/{ano_anterior}%"
+    
+    # 2. Consultar o consumo (saídas) real ocorrido no mês anterior para usar como projeção
     from database.connection import get_conn
     with get_conn() as conn:
-        movs = pd.read_sql("""
-            SELECT id_produto, SUM(ABS(quantidade)) as total
+        cursor_movs = conn.execute("""
+            SELECT id_produto, SUM(ABS(quantidade)) 
             FROM movimentacoes 
             WHERE (tipo='Saída' OR (tipo='Contagem' AND quantidade < 0))
-              AND data_hora >= date('now', '-30 days')
+              AND data_hora LIKE ?
             GROUP BY id_produto
-        """, conn)
-    cons_dict = dict(zip(movs['id_produto'], movs['total'])) if not movs.empty else {}
+        """, (pattern_anterior,)).fetchall()
+        
+        # Se não houver consumo no mês anterior (ex: novos insumos), usa histórico total como fallback
+        cons_dict = dict(cursor_movs) if cursor_movs and sum(r[1] for r in cursor_movs) > 0 else {}
+        if not cons_dict:
+            cursor_fallback = conn.execute("""
+                SELECT id_produto, SUM(ABS(quantidade)) 
+                FROM movimentacoes 
+                WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
+                GROUP BY id_produto
+            """).fetchall()
+            cons_dict = dict(cursor_fallback) if cursor_fallback else {}
+            
+    # 3. Projetar consumo para o mês do ciclo
+    df['consumo_projetado'] = df['id'].map(cons_dict).fillna(0).astype(int)
+    df['consumo_diario'] = df['consumo_projetado'] / 30.0
     
-    df['total_30d'] = df['id'].map(cons_dict).fillna(0)
-    df['consumo_diario'] = df['total_30d'] / 30.0
-    
-    # Mínimo Ideal e Sugestão de Compra
+    # 4. Mínimo Ideal (Estoque de Segurança para cobrir o Lead Time)
     minimo_calculado = np.ceil(df["consumo_diario"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int)
     df["Minimo Ideal"] = np.maximum(df["estoque_minimo"], minimo_calculado)
-    df["Sugestão Compra"] = (df["Minimo Ideal"] - df["saldo_atual"]).clip(lower=0)
+    
+    # 5. Sugestão de Compra para o ciclo: Cobrir o consumo projetado do mês seguinte + Estoque de Segurança
+    df["Sugestão Compra"] = (df["consumo_projetado"] + df["Minimo Ideal"] - df["saldo_atual"]).clip(lower=0)
     df["Custo Estimado (R$)"] = df["Sugestão Compra"] * df["valor_unitario"]
     
     # Filtrar apenas produtos que necessitam de compras para este ciclo
