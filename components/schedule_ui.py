@@ -220,7 +220,6 @@ def render_schedule_ui(df):
     pattern_anterior = f"%/{mes_anterior:02d}/{ano_anterior}%"
     
     # 2. Consultar o consumo (saídas) real ocorrido no mês anterior para usar como projeção
-    from database.connection import get_conn
     with get_conn() as conn:
         cursor_movs = conn.execute("""
             SELECT id_produto, SUM(ABS(quantidade)) 
