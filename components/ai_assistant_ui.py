@@ -178,8 +178,9 @@ def render_ai_assistant_ui(df):
                     st.markdown(msg["content"])
 
         # Contexto operacional injetado de forma estruturada para o Gemini
-        posicao_estoque_md = df_prev[['Gatilho', 'categoria', 'nome', 'saldo_atual', 'estoque_minimo', 'lead_time', 'Runway', 'Sugerido']].rename(columns={
-            'nome': 'Insumo', 'categoria': 'Setor', 'saldo_atual': 'Saldo', 'estoque_minimo': 'Minimo', 'lead_time': 'LeadTime_Dias', 'Sugerido': 'SugestaoComprar'
+        df_prev["criticidade"] = df_prev.get("criticidade", "Y").fillna("Y").str.upper()
+        posicao_estoque_md = df_prev[['Gatilho', 'categoria', 'nome', 'criticidade', 'saldo_atual', 'estoque_minimo', 'lead_time', 'Runway', 'Sugerido']].rename(columns={
+            'nome': 'Insumo', 'categoria': 'Setor', 'criticidade': 'Crit.', 'saldo_atual': 'Saldo', 'estoque_minimo': 'Minimo', 'lead_time': 'LeadTime_Dias', 'Sugerido': 'SugestaoComprar'
         }).to_markdown(index=False)
         
         movimentacoes_recente_md = recente_movs.to_markdown(index=False) if not recente_movs.empty else "Nenhuma movimentação registrada no histórico."
@@ -188,7 +189,7 @@ def render_ai_assistant_ui(df):
         Você é o Analista Logístico Preditivo Sênior do WMS 5.0, responsável pela inteligência de suprimentos de um Almoxarifado de Insumos.
         Seu objetivo principal é guiar o operador na tomada de decisões estratégicas de compras, otimização de estoque, mitigação de riscos de ruptura e auditoria.
         
-        POSIÇÃO DE ESTOQUE ATUAL & MÉTRICAS PREDITIVAS CALCULADAS (Runway = Dias de Cobertura, SugestaoComprar = Sugestão de Reposição):
+        POSIÇÃO DE ESTOQUE ATUAL & MÉTRICAS PREDITIVAS CALCULADAS (Runway = Dias de Cobertura, Crit = Criticidade XYZ, SugestaoComprar = Sugestão de Reposição):
         {posicao_estoque_md}
         
         ÚLTIMAS 10 MOVIMENTAÇÕES DE REGISTRO HISTÓRICO:

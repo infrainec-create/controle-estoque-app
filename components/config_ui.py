@@ -98,9 +98,9 @@ def render_config_ui(df):
         with st.form("new_p"):
             n = st.text_input("Nome do Insumo")
             c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
-            m = st.number_input("Mínimo", value=10)
-            l = st.number_input("Lead Time (Dias)", value=3)
-            v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
+            m = st.number_input("Mínimo", value=10, min_value=0)
+            l = st.number_input("Lead Time (Dias)", value=3, min_value=0)
+            v = st.number_input("Valor Inicial Un. (R$)", value=0.0, min_value=0.0)
             crit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=1)
             if st.form_submit_button("Cadastrar"):
                 if n.strip():
@@ -122,9 +122,9 @@ def render_config_ui(df):
             with st.form("edit_p"):
                 en = st.text_input("Nome", value=p_at["nome"])
                 ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
-                em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
-                el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
-                ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
+                em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]), min_value=0)
+                el = st.number_input("Lead Time", value=int(p_at["lead_time"]), min_value=0)
+                ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]), min_value=0.0)
                 ecrit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=idx_crit)
                 if st.form_submit_button("Atualizar"):
                     editar_produto(id_e, en, em, ev, ec, el, ecrit[0])
