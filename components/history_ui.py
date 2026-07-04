@@ -17,7 +17,8 @@ def render_history_ui(df, mv):
                 try:
                     if "Pago: R$" in str(obs):
                         return float(str(obs).split("Pago: R$ ")[1].split("/un")[0])
-                except: pass
+                except (ValueError, IndexError, AttributeError):
+                    pass
                 return None
             
             entradas_item["Preço de Compra (R$)"] = entradas_item["observacao"].apply(extrair_preco)

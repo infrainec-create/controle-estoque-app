@@ -1,3 +1,4 @@
+import sqlite3
 import random
 from datetime import datetime, timedelta
 from database.connection import get_conn
@@ -63,19 +64,30 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_logs_auditoria_data_hora ON logs_auditoria(data_hora);
         """)
         
-        try: conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
-        except: pass
-        try: conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
-        except: pass
-        try: conn.execute("ALTER TABLE logs_auditoria ADD COLUMN ip TEXT")
-        except: pass
-        try: conn.execute("ALTER TABLE logs_auditoria ADD COLUMN user_agent TEXT")
-        except: pass
-        try: conn.execute("UPDATE usuarios SET perfil = 'Administrador' WHERE usuario = 'admin'")
-        except: pass
+        try:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN aprovado INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE logs_auditoria ADD COLUMN ip TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE logs_auditoria ADD COLUMN user_agent TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("UPDATE usuarios SET perfil = 'Administrador' WHERE usuario = 'admin'")
+        except Exception:
+            pass
         try:
             conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('drive_sync_ativo', '1')")
-        except: pass
+        except Exception:
+            pass
         
         # Seeding de dados iniciais caso a tabela de produtos esteja vazia para evitar telas em branco
         try:

@@ -11,6 +11,9 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBa
 from database.connection import get_conn, DB_PATH
 from database.queries import limpar_cache_consultas
 
+_sync_lock = threading.Lock()
+_pending_sync = False
+
 try:
     FOLDER_ID = st.secrets["FOLDER_ID"]
 except Exception:
@@ -141,7 +144,37 @@ def sincronizar_banco_na_inicializacao():
             pass
 
 def executar_sincronizacao_drive():
+    global _pending_sync
+    if not _sync_lock.acquire(blocking=False):
+        _pending_sync = True
+        return
     try:
+        while True:
+            _pending_sync = False
+            _executar_sincronizacao_drive_interna()
+            if not _pending_sync:
+                break
+    finally:
+        _sync_lock.release()
+
+def _executar_sincronizacao_drive_interna():
+    backup_db_path = DB_PATH + ".sync_backup"
+    try:
+        if os.path.exists(backup_db_path):
+            try:
+                os.remove(backup_db_path)
+            except Exception:
+                pass
+                
+        # Cria cópia estática consistente do DB usando SQLite Backup API
+        with get_conn() as conn_src:
+            try:
+                conn_src.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            except Exception:
+                pass
+            with sqlite3.connect(backup_db_path) as conn_dst:
+                conn_src.backup(conn_dst)
+
         servico = obter_servico_drive()
         
         # 1. Verificação de Conflitos para evitar sobrescrever dados mais recentes da nuvem
@@ -163,14 +196,6 @@ def executar_sincronizacao_drive():
                         )
                     return
         
-        # Forçar o checkpoint do SQLite (WAL -> estoque.db) para garantir que todas as transações recentes
-        # sejam persistidas no arquivo principal antes do upload do arquivo para o Google Drive.
-        try:
-            with get_conn() as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        except Exception:
-            pass
-
         # 2. Upload Seguro do Banco de Dados (.db) com Retry (3 tentativas com Backoff)
         import time
         query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
@@ -185,7 +210,7 @@ def executar_sincronizacao_drive():
                     supportsAllDrives=True
                 ).execute().get('files', [])
                 
-                media = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                media = MediaFileUpload(backup_db_path, mimetype='application/x-sqlite3', resumable=True)
                 if files: 
                     upload_res = servico.files().update(
                         fileId=files[0]['id'], 
@@ -237,7 +262,7 @@ def executar_sincronizacao_drive():
                 
                 if res_slot:
                     # Slot já existe (criado pelo usuário), então atualizamos ele (consumindo cota do usuário)
-                    media_backup = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                    media_backup = MediaFileUpload(backup_db_path, mimetype='application/x-sqlite3', resumable=True)
                     servico.files().update(
                         fileId=res_slot[0]['id'],
                         media_body=media_backup,
@@ -254,7 +279,7 @@ def executar_sincronizacao_drive():
                     # Se não existe no Drive pessoal, tentamos criar.
                     # Se der erro de cota (o que acontece em contas de serviço sem shared drives), alertamos o usuário
                     try:
-                        media_backup = MediaFileUpload(DB_PATH, mimetype='application/x-sqlite3', resumable=True)
+                        media_backup = MediaFileUpload(backup_db_path, mimetype='application/x-sqlite3', resumable=True)
                         servico.files().create(
                             body={'name': backup_name, 'parents': [FOLDER_ID]},
                             media_body=media_backup,
@@ -341,6 +366,12 @@ def executar_sincronizacao_drive():
                 "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
                 (f"Erro de comunicação Drive: {msg}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
             )
+    finally:
+        if os.path.exists(backup_db_path):
+            try:
+                os.remove(backup_db_path)
+            except Exception:
+                pass
 
 def disparar_sincronizacao():
     limpar_cache_consultas()
@@ -396,15 +427,28 @@ def descarregar_do_drive():
                 while not done: 
                     _, done = load.next_chunk()
             
-            if os.path.exists(DB_PATH):
-                os.remove(DB_PATH)
-            os.rename(temp_path, DB_PATH)
+            # Substituição segura a nível de conexão usando backup do SQLite
+            # Isso evita ter que deletar ou renomear arquivos que possam estar em uso por outras conexões/consultas.
+            with sqlite3.connect(temp_path) as conn_src:
+                with get_conn() as conn_dst:
+                    conn_src.backup(conn_dst)
+                    # Força checkpoint no banco atualizado para limpar WAL e manter consistência
+                    try:
+                        conn_dst.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    except Exception:
+                        pass
+                        
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
             
+            # Remove arquivos WAL e SHM órfãos se existirem (embora o backup com checkpoint resolva)
             for suffix in ["-wal", "-shm"]:
                 extra_file = DB_PATH + suffix
                 if os.path.exists(extra_file):
                     try: os.remove(extra_file)
-                    except: pass
+                    except Exception: pass
             
             salvar_ultimo_sync_time_local(file_meta.get('modifiedTime'))
             
@@ -423,7 +467,7 @@ def descarregar_do_drive():
                         "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
                         (f"Erro ao baixar da nuvem: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
                     )
-        except:
+        except Exception:
             pass
         return False
     return False

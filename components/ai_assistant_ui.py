@@ -3,6 +3,15 @@ import streamlit as st
 import google.generativeai as genai
 from database.connection import get_conn
 
+@st.cache_data(ttl=3600)
+def obter_modelos_gemini(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        modelos = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        return modelos if modelos else ["gemini-1.5-flash", "gemini-1.5-pro"]
+    except Exception:
+        return ["gemini-1.5-flash", "gemini-1.5-pro"]
+
 def render_ai_assistant_ui(df):
     st.subheader("🧠 Analista IA & Previsão de Demanda WMS 5.0")
     if df.empty:
@@ -15,10 +24,8 @@ def render_ai_assistant_ui(df):
             st.warning("⚠️ O Assistente de IA está inativo. A chave `GEMINI_API_KEY` não está configurada ou possui o valor padrão no arquivo `.streamlit/secrets.toml`. Insira sua chave de API válida para habilitar a inteligência preditiva.")
             return
             
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        
         # Seleção simplificada e robusta de versão de modelo
-        modelos_validos = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        modelos_validos = obter_modelos_gemini(st.secrets["GEMINI_API_KEY"])
         
         c1, c2 = st.columns([2, 1])
         with c1:

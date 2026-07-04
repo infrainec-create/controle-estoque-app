@@ -115,12 +115,13 @@ def arquivar_logs_antigos(dias=90):
         })
         csv_content = df_export.to_csv(index=False, encoding='utf-8-sig')
         
-        # Range seguro de IDs para exclusão sem atingir limite de parâmetros do SQLite
-        min_id = int(df_arquivar['id'].min())
-        max_id = int(df_arquivar['id'].max())
+        ids_to_delete = df_arquivar['id'].tolist()
         
         with get_conn() as conn:
-            conn.execute("DELETE FROM logs_auditoria WHERE id >= ? AND id <= ?", (min_id, max_id))
+            for i in range(0, len(ids_to_delete), 900):
+                chunk = ids_to_delete[i:i+900]
+                placeholders = ",".join("?" for _ in chunk)
+                conn.execute(f"DELETE FROM logs_auditoria WHERE id IN ({placeholders})", chunk)
             
         return True, csv_content, len(df_arquivar)
     except Exception as e:
