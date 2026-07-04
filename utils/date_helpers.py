@@ -1,4 +1,22 @@
 import datetime
+from database.connection import get_conn
+
+def obter_parametros_cronograma():
+    params = {
+        "dias_antes_inicio_sol": 5,
+        "dias_antes_fim_sol": 3,
+        "dias_uteis_analise": 5,
+        "dias_uteis_entrega": 3
+    }
+    try:
+        with get_conn() as conn:
+            rows = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'crono_%'").fetchall()
+            for key, val in rows:
+                k = key.replace("crono_", "")
+                params[k] = int(val)
+    except Exception:
+        pass
+    return params
 
 def obter_ultimo_dia_mes(dt):
     """Retorna o último dia do mês para a data fornecida."""
@@ -25,12 +43,15 @@ def adicionar_dias_uteis(data_inicial, dias):
 
 def obter_cronograma_mes(ano, mes):
     """
-    Calcula as datas importantes para o ciclo de compras de um mês alvo específico:
-    - Janela de Solicitação: de 5 a 3 dias antes do fim do mês anterior.
-    - Início da Análise: 1º dia útil do mês alvo.
-    - Aprovação de Compras: +5 dias úteis.
-    - Entrega do Fornecedor: +3 dias úteis adicionais (8 dias úteis no total).
+    Calcula as datas importantes para o ciclo de compras de um mês alvo específico
+    utilizando os parâmetros operacionais dinâmicos carregados do banco de dados.
     """
+    params = obter_parametros_cronograma()
+    d_inicio = params["dias_antes_inicio_sol"]
+    d_fim = params["dias_antes_fim_sol"]
+    d_analise = params["dias_uteis_analise"]
+    d_entrega = params["dias_uteis_entrega"]
+
     # Determinar o mês anterior para a janela de solicitação
     if mes == 1:
         ano_anterior = ano - 1
@@ -41,18 +62,18 @@ def obter_cronograma_mes(ano, mes):
         
     ultimo_dia_anterior = obter_ultimo_dia_mes(datetime.date(ano_anterior, mes_anterior, 1))
     
-    # Janela de solicitação: 5 a 3 dias antes do fim do mês anterior
-    data_inicio_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=5)
-    data_fim_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=3)
+    # Janela de solicitação
+    data_inicio_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_inicio)
+    data_fim_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_fim)
     
     # Início da análise: 1º dia útil do mês alvo
     data_inicio_analise = obter_primeiro_dia_util(ano, mes)
     
-    # Aprovação (5 dias úteis)
-    data_aprovacao = adicionar_dias_uteis(data_inicio_analise, 5)
+    # Aprovação (Lead Time interno)
+    data_aprovacao = adicionar_dias_uteis(data_inicio_analise, d_analise)
     
-    # Entrega (mais 3 dias úteis, total de 8 dias úteis)
-    data_entrega = adicionar_dias_uteis(data_aprovacao, 3)
+    # Entrega (Lead Time fornecedor)
+    data_entrega = adicionar_dias_uteis(data_aprovacao, d_entrega)
     
     return {
         "mes_alvo": mes,

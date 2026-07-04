@@ -86,6 +86,10 @@ def init_db():
             pass
         try:
             conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('drive_sync_ativo', '1')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_antes_inicio_sol', '5')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_antes_fim_sol', '3')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_uteis_analise', '5')")
+            conn.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('crono_dias_uteis_entrega', '3')")
         except Exception:
             pass
         

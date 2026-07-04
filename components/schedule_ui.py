@@ -2,11 +2,16 @@ import datetime
 import pandas as pd
 import numpy as np
 import streamlit as st
-from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega
+from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega, obter_parametros_cronograma
+from database.connection import get_conn
+from database.queries import registrar_log_auditoria
+from utils.drive_sync import disparar_sincronizacao
 
 def render_schedule_ui(df):
     st.subheader("📅 Cronograma Integrado de Compras & Fluxo Logístico")
     st.caption("Acompanhamento das etapas do ciclo de abastecimento: da abertura da solicitação até a entrega física na prateleira.")
+    
+    params = obter_parametros_cronograma()
     
     if df.empty:
         st.info("Cadastre insumos na aba de Configurações para habilitar o cronograma de compras.")
@@ -154,11 +159,11 @@ def render_schedule_ui(df):
     # --- 5. DETALHES DAS REGRAS LOGÍSTICAS ---
     with st.expander("ℹ️ Regras Operacionais de Abastecimento (Informações)", expanded=False):
         st.markdown(f"""
-        * **Prazo de Solicitação**: As requisições de reabastecimento devem ser salvas de **3 a 5 dias antes do fechamento do mês anterior** (para o mês de {formatar_opcao(mes_sel).split(' de ')[0]}, a janela vai de `{inicio_sol_f}` a `{fim_sol_f}`).
+        * **Prazo de Solicitação**: As requisições de reabastecimento devem ser salvas de **{params['dias_antes_fim_sol']} a {params['dias_antes_inicio_sol']} dias antes do fechamento do mês anterior** (para o mês de {formatar_opcao(mes_sel).split(' de ')[0]}, a janela vai de `{inicio_sol_f}` a `{fim_sol_f}`).
         * **Início de Análise (Setor de Compras)**: O setor administrativo/compras consolida e inicia a análise no **primeiro dia útil do mês de referência** (`{inicio_an_f}`).
-        * **Lead Time Interno (5 dias úteis)**: Prazo do setor de compras para realizar cotações e aprovar os pedidos (`{inicio_an_f}` até `{aprov_f}`).
-        * **Lead Time Externo / Fornecedor (3 dias úteis)**: Prazo máximo estipulado para que o fornecedor efetue a entrega física no almoxarifado (`{aprov_f}` até `{entrega_f}`).
-        * **Lead Time Total**: **8 dias úteis** contados a partir do início do mês de referência.
+        * **Lead Time Interno ({params['dias_uteis_analise']} dias úteis)**: Prazo do setor de compras para realizar cotações e aprovar os pedidos (`{inicio_an_f}` até `{aprov_f}`).
+        * **Lead Time Externo / Fornecedor ({params['dias_uteis_entrega']} dias úteis)**: Prazo máximo estipulado para que o fornecedor efetue a entrega física no almoxarifado (`{aprov_f}` até `{entrega_f}`).
+        * **Lead Time Total**: **{params['dias_uteis_analise'] + params['dias_uteis_entrega']} dias úteis** contados a partir do início do mês de referência.
         """)
 
     # --- 6. LISTA DE COMPRAS SUGERIDAS PARA ESTE CICLO ---
@@ -256,3 +261,64 @@ def render_schedule_ui(df):
         )
     else:
         st.success("🎉 **Excelente!** Com base nos saldos atuais de prateleira e ritmos de consumo, não há nenhum insumo necessitando de compras para este ciclo.")
+
+    # --- 7. CONFIGURAÇÃO DE PARÂMETROS DO CRONOGRAMA ---
+    st.divider()
+    st.markdown("### ⚙️ Configurações e Parâmetros do Ciclo de Abastecimento")
+    
+    is_admin = st.session_state.get("perfil_atual") == "Administrador"
+    
+    if is_admin:
+        with st.expander("🛠️ Ajustar Parâmetros de Prazos e Lead Times (Apenas Administradores)", expanded=False):
+            st.caption("Ajuste os parâmetros abaixo para recalcular dinamicamente as datas do cronograma e o cálculo do estoque mínimo ideal.")
+            
+            with st.form("form_parametros_crono"):
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    novo_inicio_sol = st.number_input(
+                        "Dias antes do fim do mês para INICIAR a janela de solicitação:",
+                        min_value=1, max_value=28, value=int(params["dias_antes_inicio_sol"]),
+                        help="Define quantos dias antes do último dia do mês o sistema abre o período de requisições."
+                    )
+                    novo_fim_sol = st.number_input(
+                        "Dias antes do fim do mês para ENCERRAR a janela de solicitação:",
+                        min_value=1, max_value=28, value=int(params["dias_antes_fim_sol"]),
+                        help="Define quantos dias antes do último dia do mês o sistema encerra o período de requisições."
+                    )
+                with col_c2:
+                    novo_analise = st.number_input(
+                        "Prazo de Processamento/Análise Interna de Compras (Dias Úteis):",
+                        min_value=1, max_value=60, value=int(params["dias_uteis_analise"]),
+                        help="Lead time administrativo interno do setor de compras."
+                    )
+                    novo_entrega = st.number_input(
+                        "Prazo de Entrega do Fornecedor (Dias Úteis):",
+                        min_value=1, max_value=60, value=int(params["dias_uteis_entrega"]),
+                        help="Lead time do fornecedor externo para a entrega física."
+                    )
+                    
+                if st.form_submit_button("💾 Salvar e Atualizar Cronograma", type="primary", use_container_width=True):
+                    if novo_fim_sol >= novo_inicio_sol:
+                        st.error("❌ O início da janela de solicitação deve ser antes do fim (ex: início em 5 dias e fim em 3 dias antes do fechamento do mês).")
+                    else:
+                        try:
+                            with get_conn() as conn:
+                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_inicio_sol'", (str(novo_inicio_sol),))
+                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_fim_sol'", (str(novo_fim_sol),))
+                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_analise'", (str(novo_analise),))
+                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_entrega'", (str(novo_entrega),))
+                            
+                            detalhe_log = (f"Parâmetros de cronograma alterados: Janela de solicitação={novo_inicio_sol} a {novo_fim_sol} dias antes; "
+                                           f"Lead time interno={novo_analise} dias úteis; Lead time fornecedor={novo_entrega} dias úteis.")
+                            registrar_log_auditoria(st.session_state["usuario_atual"], "Alterar Parâmetros Cronograma", detalhe_log)
+                            
+                            # Dispara o sincronismo e limpa caches
+                            disparar_sincronizacao()
+                            
+                            st.toast("Parâmetros salvos e sincronizados!", icon="✅")
+                            st.success("Configurações do cronograma atualizadas com sucesso!")
+                            st.rerun()
+                        except Exception as e_cfg:
+                            st.error(f"Erro ao salvar configurações no banco de dados: {e_cfg}")
+    else:
+        st.info("🔒 **Painel de Configuração Reservado:** Apenas Administradores do sistema podem editar os prazos e parâmetros logísticos do cronograma de compras.")
