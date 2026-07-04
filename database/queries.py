@@ -16,24 +16,24 @@ def listar_movimentacoes():
         """, conn)
 
 @retry_db_operation()
-def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time):
+def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time, criticidade='Y'):
     try:
         with get_conn() as conn:
             conn.execute(
-                "INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario, categoria, lead_time) VALUES (?, 0, ?, ?, ?, ?)", 
-                (nome, estoque_minimo, valor_unitario, categoria, lead_time)
+                "INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario, categoria, lead_time, criticidade) VALUES (?, 0, ?, ?, ?, ?, ?)", 
+                (nome, estoque_minimo, valor_unitario, categoria, lead_time, criticidade)
             )
         return True, "Sucesso"
     except Exception as e: 
         return False, str(e)
 
 @retry_db_operation()
-def editar_produto(id_p, nome, min_e, valor, cat, lead):
+def editar_produto(id_p, nome, min_e, valor, cat, lead, criticidade='Y'):
     try:
         with get_conn() as conn:
             conn.execute(
-                "UPDATE produtos SET nome=?, estoque_minimo=?, valor_unitario=?, categoria=?, lead_time=? WHERE id=?", 
-                (nome, min_e, valor, cat, lead, id_p)
+                "UPDATE produtos SET nome=?, estoque_minimo=?, valor_unitario=?, categoria=?, lead_time=?, criticidade=? WHERE id=?", 
+                (nome, min_e, valor, cat, lead, criticidade, id_p)
             )
         return True, "Sucesso"
     except Exception as e:

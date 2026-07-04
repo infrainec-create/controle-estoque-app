@@ -101,10 +101,11 @@ def render_config_ui(df):
             m = st.number_input("Mínimo", value=10)
             l = st.number_input("Lead Time (Dias)", value=3)
             v = st.number_input("Valor Inicial Un. (R$)", value=0.0)
+            crit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=1)
             if st.form_submit_button("Cadastrar"):
                 if n.strip():
-                    cadastrar_produto(n.strip(), m, v, c, l)
-                    registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}")
+                    cadastrar_produto(n.strip(), m, v, c, l, crit[0])
+                    registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}, Criticidade: {crit[0]}")
                     disparar_sincronizacao()
                     st.toast(f"➕ Cadastrado!", icon="✨")
                     st.rerun()
@@ -115,15 +116,19 @@ def render_config_ui(df):
             s_e = st.selectbox("Produto p/ Editar", list(op_e.keys()))
             id_e = op_e[s_e]
             p_at = df[df["id"]==id_e].iloc[0]
+            p_crit_db = p_at.get("criticidade", "Y")
+            idx_crit = 0 if p_crit_db == 'X' else (1 if p_crit_db == 'Y' else 2)
+            
             with st.form("edit_p"):
                 en = st.text_input("Nome", value=p_at["nome"])
                 ec = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
                 em = st.number_input("Mínimo", value=int(p_at["estoque_minimo"]))
                 el = st.number_input("Lead Time", value=int(p_at["lead_time"]))
                 ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]))
+                ecrit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=idx_crit)
                 if st.form_submit_button("Atualizar"):
-                    editar_produto(id_e, en, em, ev, ec, el)
-                    registrar_log_auditoria(st.session_state["usuario_atual"], "Editar Insumo", f"Insumo ID {id_e} editado. Novo Nome: '{en}', Setor: {ec}, Mínimo: {em}, Preço: R$ {ev:.2f}")
+                    editar_produto(id_e, en, em, ev, ec, el, ecrit[0])
+                    registrar_log_auditoria(st.session_state["usuario_atual"], "Editar Insumo", f"Insumo ID {id_e} editado. Novo Nome: '{en}', Setor: {ec}, Mínimo: {em}, Preço: R$ {ev:.2f}, Criticidade: {ecrit[0]}")
                     disparar_sincronizacao()
                     st.toast(f"✏️ Atualizado!", icon="⚙️")
                     st.rerun()

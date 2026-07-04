@@ -105,6 +105,16 @@ def render_dashboard_ui(df):
     df['total'] = df['id'].map(cons_dict).fillna(0)
     df['consumo_diario'] = df['total'] / janela_dias
     
+    # Cálculos Logísticos para Ponto de Pedido Automático e Estoque de Segurança
+    def obter_fator_setor(row):
+        cat = row["categoria"]
+        return fatores_setor.get(cat, padroes.get(cat, 1.1))
+        
+    df["Fator_Seguranca"] = df.apply(obter_fator_setor, axis=1)
+    df["Estoque_Seguranca"] = np.maximum(df["estoque_minimo"], np.ceil(df["consumo_diario"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int))
+    df["Consumo_Lead_Time"] = np.ceil(df["consumo_diario"] * df["lead_time"]).astype(int)
+    df["Ponto_Pedido"] = df["Consumo_Lead_Time"] + df["Estoque_Seguranca"]
+    
     # 5. Runway e Status
     mask = df['consumo_diario'] > 0
     df['Runway'] = 999
@@ -113,42 +123,64 @@ def render_dashboard_ui(df):
     def set_status(row):
         if row['saldo_atual'] <= 0: return '🔴 Ruptura'
         if row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
-        if row['Runway'] != 999 and row['Runway'] <= row['lead_time']: return '🟠 Risco'
+        if row['saldo_atual'] <= row['Ponto_Pedido']: return '🟠 Ponto de Pedido'
         return '🟢 OK'
         
     df['Status'] = df.apply(set_status, axis=1)
     df['Runway_Txt'] = df['Runway'].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
 
-    itens_criticos = int((df["saldo_atual"] < df["estoque_minimo"]).sum())
-    if itens_criticos > 0:
-        card_critico_style = 'border-top: 4px solid #ef4444;'
-    else:
-        card_critico_style = 'border-top: 4px solid #10b859;'
+    # Cálculos agregados de Supply Chain (Giro, DIO, Ruptura)
+    df['estoque_medio'] = df['saldo_atual'] + (df['total'] / 2.0)
+    df.loc[df['estoque_medio'] <= 0, 'estoque_medio'] = 1.0
+    
+    custo_consumo_total = (df['total'] * df['valor_unitario']).sum()
+    valor_estoque_medio = (df['estoque_medio'] * df['valor_unitario']).sum()
+    
+    giro_periodo = (custo_consumo_total / valor_estoque_medio) if valor_estoque_medio > 0 else 0.0
+    giro_anualizado = giro_periodo * (365.0 / janela_dias)
+    
+    consumo_diario_financeiro = (df['consumo_diario'] * df['valor_unitario']).sum()
+    dio_medio = (valor_estoque_medio / consumo_diario_financeiro) if consumo_diario_financeiro > 0 else 999.0
+    
+    total_itens = len(df)
+    rupturas = (df["saldo_atual"] <= 0).sum()
+    taxa_ruptura = (rupturas / total_itens * 100) if total_itens > 0 else 0.0
 
     # Cartões de Métricas
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     c1.markdown(f'''
         <div class="metric-card" style="border-top: 4px solid #3b82f6;">
-            <div class="card-title">📂 Setores</div>
-            <div class="card-value">{df["categoria"].nunique()}</div>
-        </div>
-    ''', unsafe_allow_html=True)
-    c2.markdown(f'''
-        <div class="metric-card" style="border-top: 4px solid #8b5cf6;">
-            <div class="card-title">💰 Capital Total</div>
+            <div class="card-title">💰 Capital Imobilizado</div>
             <div class="card-value">R$ {df["valor_total"].sum():,.2f}</div>
         </div>
     ''', unsafe_allow_html=True)
-    c3.markdown(f'''
-        <div class="metric-card" style="{card_critico_style}">
-            <div class="card-title">🚨 Críticos/Rupturas</div>
-            <div class="card-value">{itens_criticos}</div>
+    
+    if taxa_ruptura > 10:
+        ruptura_style = 'border-top: 4px solid #ef4444;'
+    elif taxa_ruptura > 0:
+        ruptura_style = 'border-top: 4px solid #ea580c;'
+    else:
+        ruptura_style = 'border-top: 4px solid #10b859;'
+        
+    c2.markdown(f'''
+        <div class="metric-card" style="{ruptura_style}">
+            <div class="card-title">🚨 Taxa de Ruptura</div>
+            <div class="card-value">{taxa_ruptura:.1f}%</div>
         </div>
     ''', unsafe_allow_html=True)
+    
+    c3.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #8b5cf6;">
+            <div class="card-title">🔄 Giro de Estoque (An.)</div>
+            <div class="card-value">{giro_anualizado:.2f}x</div>
+        </div>
+    ''', unsafe_allow_html=True)
+    
+    dio_txt = "Sem saídas" if dio_medio == 999.0 else f"{dio_medio:.1f} dias"
     c4.markdown(f'''
-        <div class="metric-card" style="border-top: 4px solid #10b859;">
-            <div class="card-title">🔄 Giro ({janela_dias}d)</div>
-            <div class="card-value">{int(df["total"].sum())} un</div>
+        <div class="metric-card" style="border-top: 4px solid #ea580c;">
+            <div class="card-title">📅 Cobertura Média (DIO)</div>
+            <div class="card-value">{dio_txt}</div>
         </div>
     ''', unsafe_allow_html=True)
 
@@ -176,22 +208,26 @@ def render_dashboard_ui(df):
         if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
         return ''
 
-    display_df = df_filtrado[['Status', 'categoria', 'nome', 'saldo_atual', 'valor_unitario', 'estoque_minimo', 'Runway_Txt']].rename(
-        columns={'categoria':'Setor', 'nome':'Produto', 'valor_unitario': 'Preço Médio', 'Runway_Txt':'Cobertura (Runway)'}
+    df_filtrado["criticidade"] = df_filtrado["criticidade"].fillna("Y").str.upper()
+    display_df = df_filtrado[['Status', 'categoria', 'nome', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 'Runway_Txt']].rename(
+        columns={
+            'categoria':'Setor', 
+            'nome':'Produto', 
+            'criticidade':'Crit.', 
+            'saldo_atual':'Saldo Físico', 
+            'Ponto_Pedido':'Ponto Pedido', 
+            'Runway_Txt':'Cobertura (Runway)'
+        }
     )
     
     st.dataframe(
-        display_df.style.map(destacar_status, subset=['Status']).format({'Preço Médio': 'R$ {:.2f}'}),
+        display_df.style.map(destacar_status, subset=['Status']),
         hide_index=True, width='stretch'
     )
 
     st.divider()
     
-    # Gráficos de Performance e Giro
-    st.subheader("📊 Gráficos de Performance e Movimentação")
-    df["total"] = pd.to_numeric(df["total"], errors="coerce").fillna(0)
-    
-    g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🎯 Matriz de Risco & Lead Time"])
+    g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🔍 Matriz ABC-XYZ (Criticidade)", "🎯 Matriz de Risco & Lead Time"])
     
     with g_tabs[0]:
         g1, g2 = st.columns(2)
@@ -294,6 +330,71 @@ def render_dashboard_ui(df):
             st.info("Cadastre valores unitários e saldos maiores que zero para ver a análise da Curva ABC.")
             
     with g_tabs[2]:
+        st.markdown("##### 🔍 Matriz de Interseção ABC-XYZ")
+        st.caption("A Matriz ABC-XYZ cruza o valor financeiro do estoque (ABC) com a criticidade operacional (XYZ): "
+                   "**Classe X** (Baixa criticidade), **Classe Y** (Média criticidade) e **Classe Z** (Crítica/Vital).")
+        
+        # Obter os dados da Matriz ABC-XYZ
+        df_matrix = df.copy()
+        df_matrix["criticidade"] = df_matrix["criticidade"].fillna("Y").str.upper()
+        
+        # Classificação XYZ amigável
+        xyz_labels = {"X": "X (Baixa)", "Y": "Y (Média)", "Z": "Z (Crítica/Vital)"}
+        df_matrix["Classe_XYZ"] = df_matrix["criticidade"].map(xyz_labels).fillna("Y (Média)")
+        
+        # Criar a matriz de contagem 3x3
+        matrix_counts = pd.DataFrame(
+            0,
+            index=["Classe A", "Classe B", "Classe C"],
+            columns=["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"]
+        )
+        
+        for _, row in df_matrix.iterrows():
+            abc = row["Classe_ABC"]
+            xyz = row["Classe_XYZ"]
+            if abc in matrix_counts.index and xyz in matrix_counts.columns:
+                matrix_counts.loc[abc, xyz] += 1
+                
+        # Exibir o gráfico Heatmap interativo
+        fig_matrix = px.imshow(
+            matrix_counts.values,
+            labels=dict(x="Criticidade (XYZ)", y="Impacto Financeiro (ABC)", color="Insumos"),
+            x=matrix_counts.columns,
+            y=matrix_counts.index,
+            text_auto=True,
+            color_continuous_scale="Reds"
+        )
+        fig_matrix.update_layout(
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=300,
+            coloraxis_showscale=False
+        )
+        apply_premium_chart_theme(fig_matrix)
+        st.plotly_chart(fig_matrix, use_container_width=True)
+        
+        # Recomendações Estratégicas para cada interseção
+        st.markdown("##### 💡 Recomendações Logísticas de Compra:")
+        r_cols = st.columns(3)
+        with r_cols[0]:
+            st.error("**🔴 Quadrante Crítico (A-Z / B-Z)**")
+            st.markdown(
+                "- **Foco:** Máxima segurança contra rupturas.\n"
+                "- **Ação:** Manter estoque de segurança alto, auditorias frequentes e contratos com fornecedores confiáveis."
+            )
+        with r_cols[1]:
+            st.warning("**🟡 Quadrante de Atenção (A-X / A-Y / B-Y)**")
+            st.markdown(
+                "- **Foco:** Otimização financeira de capital.\n"
+                "- **Ação:** Reduzir estoque de segurança (itens de fácil substituição) para liberar capital de giro imobilizado."
+            )
+        with r_cols[2]:
+            st.success("**🟢 Quadrante Simplificado (C-X / C-Y / C-Z)**")
+            st.markdown(
+                "- **Foco:** Eficiência operacional (custo de pedido).\n"
+                "- **Ação:** Comprar lotes maiores (alta cobertura de estoque) para reduzir a frequência de novas solicitações."
+            )
+            
+    with g_tabs[3]:
         st.markdown("##### 🎯 Matriz Dinâmica de Risco: Cobertura (Runway) vs Tempo de Entrega (Lead Time)")
         
         # Matriz Scatter de Risco
@@ -308,7 +409,7 @@ def render_dashboard_ui(df):
             size=df_scatter["saldo_atual"].clip(lower=8),
             hover_name="nome",
             labels={"Runway_Scatter": "Cobertura de Estoque (Dias)", "lead_time": "Tempo de Entrega (Dias)", "Status": "Criticidade"},
-            color_discrete_map={"🔴 Ruptura": "#ef4444", "🔴 Crítico": "#ea580c", "🟠 Risco": "#f59e0b", "🟢 OK": "#10b859"}
+            color_discrete_map={"🔴 Ruptura": "#ef4444", "🔴 Crítico": "#ea580c", "🟠 Ponto de Pedido": "#f59e0b", "🟢 OK": "#10b859"}
         )
         
         fig_scatter.add_trace(
@@ -363,11 +464,18 @@ def render_dashboard_ui(df):
         
     df_filtrado["Fator_Seguranca"] = df_filtrado.apply(obter_fator_setor, axis=1)
     
-    # O Mínimo Ideal é o teto do consumo do Lead Time com a margem da classe ABC, garantindo que não seja inferior ao estoque mínimo configurado
+    # O Mínimo Ideal é o estoque de segurança
     minimo_calculado = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"] * df_filtrado["Fator_Seguranca"]).astype(int)
     df_filtrado["Minimo Ideal"] = np.maximum(df_filtrado["estoque_minimo"], minimo_calculado)
-    df_filtrado["Alvo"] = df_filtrado["Minimo Ideal"]
-    df_filtrado["Sugestão Compra"] = (df_filtrado["Alvo"] - df_filtrado["saldo_atual"]).clip(lower=0)
+    
+    # Ponto de Pedido = Consumo no Lead Time + Mínimo Ideal (Estoque de Segurança)
+    df_filtrado["Consumo_LT"] = np.ceil(df_filtrado["consumo_diario"] * df_filtrado["lead_time"]).astype(int)
+    df_filtrado["Ponto_Pedido"] = df_filtrado["Consumo_LT"] + df_filtrado["Minimo Ideal"]
+    
+    # A sugestão de compra é recomendada se Saldo <= Ponto de Pedido
+    df_filtrado["Sugestão Compra"] = 0
+    sub_pp = df_filtrado["saldo_atual"] <= df_filtrado["Ponto_Pedido"]
+    df_filtrado.loc[sub_pp, "Sugestão Compra"] = np.ceil(df_filtrado.loc[sub_pp, "Ponto_Pedido"] * 1.5 - df_filtrado.loc[sub_pp, "saldo_atual"]).astype(int).clip(lower=0)
     
     # Previsão de entrega baseada nas regras operacionais
     from utils.date_helpers import calcular_previsao_entrega
@@ -384,14 +492,18 @@ def render_dashboard_ui(df):
     if apenas_compras:
         df_compras = df_compras[df_compras["Sugestão Compra"] > 0]
         
+    df_compras["criticidade"] = df_compras["criticidade"].fillna("Y").str.upper()
+    
     st.dataframe(
-        df_compras[["categoria", "nome", "lead_time", "saldo_atual", "Minimo Ideal", "Sugestão Compra", "Previsão de Entrega"]].rename(
+        df_compras[["categoria", "nome", "criticidade", "saldo_atual", "Ponto_Pedido", "Minimo Ideal", "Sugestão Compra", "Previsão de Entrega"]].rename(
             columns={
                 "categoria": "Setor", 
                 "nome": "Produto", 
-                "lead_time": "Entrega(d)", 
-                "saldo_atual": "Saldo", 
-                "Sugestão Compra": "Comprar",
+                "criticidade": "Crit.",
+                "saldo_atual": "Saldo Físico", 
+                "Ponto_Pedido": "Ponto de Pedido",
+                "Minimo Ideal": "Est. Segurança", 
+                "Sugestão Compra": "Sugestão Compra",
                 "Previsão de Entrega": "Previsão Entrega"
             }
         ), 

@@ -36,7 +36,8 @@ def init_db():
                 estoque_minimo INTEGER DEFAULT 10,
                 valor_unitario REAL DEFAULT 0,
                 categoria TEXT DEFAULT 'Geral',
-                lead_time INTEGER DEFAULT 3
+                lead_time INTEGER DEFAULT 3,
+                criticidade TEXT DEFAULT 'Y'
             );
             CREATE TABLE IF NOT EXISTS movimentacoes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,10 @@ def init_db():
             pass
         try:
             conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE produtos ADD COLUMN criticidade TEXT DEFAULT 'Y'")
         except sqlite3.OperationalError:
             pass
         try:
