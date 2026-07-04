@@ -66,6 +66,19 @@ def obter_cronograma_mes(ano, mes):
     data_inicio_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_inicio)
     data_fim_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_fim)
     
+    # Verifica se há override específico para este ciclo
+    key_override = f"crono_override_sol_{ano}_{mes}"
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT valor FROM configuracoes WHERE chave = ?", (key_override,)).fetchone()
+            if row:
+                parts = row[0].split(":")
+                if len(parts) == 2:
+                    data_inicio_solicitacao = datetime.date.fromisoformat(parts[0])
+                    data_fim_solicitacao = datetime.date.fromisoformat(parts[1])
+    except Exception:
+        pass
+    
     # Início da análise: 1º dia útil do mês alvo
     data_inicio_analise = obter_primeiro_dia_util(ano, mes)
     

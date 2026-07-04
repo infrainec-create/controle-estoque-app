@@ -272,53 +272,142 @@ def render_schedule_ui(df):
         with st.expander("🛠️ Ajustar Parâmetros de Prazos e Lead Times (Apenas Administradores)", expanded=False):
             st.caption("Ajuste os parâmetros abaixo para recalcular dinamicamente as datas do cronograma e o cálculo do estoque mínimo ideal.")
             
-            with st.form("form_parametros_crono"):
-                col_c1, col_c2 = st.columns(2)
-                with col_c1:
-                    novo_inicio_sol = st.number_input(
-                        "Dias antes do fim do mês para INICIAR a janela de solicitação:",
-                        min_value=1, max_value=28, value=int(params["dias_antes_inicio_sol"]),
-                        help="Define quantos dias antes do último dia do mês o sistema abre o período de requisições."
-                    )
-                    novo_fim_sol = st.number_input(
-                        "Dias antes do fim do mês para ENCERRAR a janela de solicitação:",
-                        min_value=1, max_value=28, value=int(params["dias_antes_fim_sol"]),
-                        help="Define quantos dias antes do último dia do mês o sistema encerra o período de requisições."
-                    )
-                with col_c2:
-                    novo_analise = st.number_input(
-                        "Prazo de Processamento/Análise Interna de Compras (Dias Úteis):",
-                        min_value=1, max_value=60, value=int(params["dias_uteis_analise"]),
-                        help="Lead time administrativo interno do setor de compras."
-                    )
-                    novo_entrega = st.number_input(
-                        "Prazo de Entrega do Fornecedor (Dias Úteis):",
-                        min_value=1, max_value=60, value=int(params["dias_uteis_entrega"]),
-                        help="Lead time do fornecedor externo para a entrega física."
-                    )
+            tab_params, tab_override = st.tabs(["⚙️ Parâmetros Globais", "📅 Sobrescrever Janela do Ciclo Atual"])
+            
+            with tab_params:
+                with st.form("form_parametros_crono"):
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
+                        novo_inicio_sol = st.number_input(
+                            "Dias antes do fim do mês para INICIAR a janela de solicitação:",
+                            min_value=1, max_value=28, value=int(params["dias_antes_inicio_sol"]),
+                            help="Define quantos dias antes do último dia do mês o sistema abre o período de requisições."
+                        )
+                        novo_fim_sol = st.number_input(
+                            "Dias antes do fim do mês para ENCERRAR a janela de solicitação:",
+                            min_value=1, max_value=28, value=int(params["dias_antes_fim_sol"]),
+                            help="Define quantos dias antes do último dia do mês o sistema encerra o período de requisições."
+                        )
+                    with col_c2:
+                        novo_analise = st.number_input(
+                            "Prazo de Processamento/Análise Interna de Compras (Dias Úteis):",
+                            min_value=1, max_value=60, value=int(params["dias_uteis_analise"]),
+                            help="Lead time administrativo interno do setor de compras."
+                        )
+                        novo_entrega = st.number_input(
+                            "Prazo de Entrega do Fornecedor (Dias Úteis):",
+                            min_value=1, max_value=60, value=int(params["dias_uteis_entrega"]),
+                            help="Lead time do fornecedor externo para a entrega física."
+                        )
+                        
+                    if st.form_submit_button("💾 Salvar e Atualizar Parâmetros Globais", type="primary", use_container_width=True):
+                        if novo_fim_sol >= novo_inicio_sol:
+                            st.error("❌ O início da janela de solicitação deve ser antes do fim (ex: início em 5 dias e fim em 3 dias antes do fechamento do mês).")
+                        else:
+                            try:
+                                with get_conn() as conn:
+                                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_inicio_sol'", (str(novo_inicio_sol),))
+                                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_fim_sol'", (str(novo_fim_sol),))
+                                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_analise'", (str(novo_analise),))
+                                    conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_entrega'", (str(novo_entrega),))
+                                
+                                detalhe_log = (f"Parâmetros de cronograma alterados: Janela de solicitação={novo_inicio_sol} a {novo_fim_sol} dias antes; "
+                                               f"Lead time interno={novo_analise} dias úteis; Lead time fornecedor={novo_entrega} dias úteis.")
+                                registrar_log_auditoria(st.session_state["usuario_atual"], "Alterar Parâmetros Cronograma", detalhe_log)
+                                
+                                # Dispara o sincronismo e limpa caches
+                                disparar_sincronizacao()
+                                
+                                st.toast("Parâmetros salvos e sincronizados!", icon="✅")
+                                st.success("Configurações do cronograma atualizadas com sucesso!")
+                                st.rerun()
+                            except Exception as e_cfg:
+                                st.error(f"Erro ao salvar configurações no banco de dados: {e_cfg}")
+                                
+            with tab_override:
+                # Determina o nome do mês formatado
+                nomes_meses_loc = [
+                    "", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+                ]
+                st.markdown(f"##### Ajuste Fino para o Ciclo de **{nomes_meses_loc[mes_c]} de {ano_c}**")
+                st.caption("Ao aplicar uma data específica abaixo, ela anulará as regras de dias antes do mês apenas para este período.")
+                
+                # Procura se já existe override no banco
+                key_override = f"crono_override_sol_{ano_c}_{mes_c}"
+                override_atual = None
+                try:
+                    with get_conn() as conn:
+                        row_ov = conn.execute("SELECT valor FROM configuracoes WHERE chave = ?", (key_override,)).fetchone()
+                        if row_ov:
+                            override_atual = row_ov[0]
+                except Exception:
+                    pass
                     
-                if st.form_submit_button("💾 Salvar e Atualizar Cronograma", type="primary", use_container_width=True):
-                    if novo_fim_sol >= novo_inicio_sol:
-                        st.error("❌ O início da janela de solicitação deve ser antes do fim (ex: início em 5 dias e fim em 3 dias antes do fechamento do mês).")
+                # Calcula as datas padrão do helper de data
+                from utils.date_helpers import obter_ultimo_dia_mes
+                if mes_c == 1:
+                    u_dia = obter_ultimo_dia_mes(datetime.date(ano_c - 1, 12, 1))
+                else:
+                    u_dia = obter_ultimo_dia_mes(datetime.date(ano_c, mes_c - 1, 1))
+                
+                default_inicio = u_dia - datetime.timedelta(days=int(params["dias_antes_inicio_sol"]))
+                default_fim = u_dia - datetime.timedelta(days=int(params["dias_antes_fim_sol"]))
+                
+                if override_atual:
+                    try:
+                        p_ov = override_atual.split(":")
+                        default_inicio = datetime.date.fromisoformat(p_ov[0])
+                        default_fim = datetime.date.fromisoformat(p_ov[1])
+                        st.info(f"💡 **Status:** Este ciclo possui datas personalizadas ativas: `{default_inicio.strftime('%d/%m/%Y')}` a `{default_fim.strftime('%d/%m/%Y')}`.")
+                    except Exception:
+                        pass
+                else:
+                    st.caption("🟢 **Status:** Usando a janela de solicitação calculada padrão (sem data fixa).")
+                    
+                with st.form("form_override_crono"):
+                    c_o1, c_o2 = st.columns(2)
+                    with c_o1:
+                        data_ini_input = st.date_input("Data de INÍCIO da janela de solicitação:", value=default_inicio)
+                    with c_o2:
+                        data_fim_input = st.date_input("Data de FIM da janela de solicitação:", value=default_fim)
+                        
+                    c_ob1, c_ob2 = st.columns(2)
+                    with c_ob1:
+                        salvar_ov = st.form_submit_button("💾 Salvar Ajuste deste Ciclo", type="primary", use_container_width=True)
+                    with c_ob2:
+                        limpar_ov = st.form_submit_button("🔄 Restaurar Padrão do Ciclo", type="secondary", use_container_width=True)
+                        
+                if salvar_ov:
+                    if data_ini_input >= data_fim_input:
+                        st.error("❌ A data de início deve ser anterior à data de fim da janela de solicitação.")
                     else:
                         try:
+                            valor_ov = f"{data_ini_input.isoformat()}:{data_fim_input.isoformat()}"
                             with get_conn() as conn:
-                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_inicio_sol'", (str(novo_inicio_sol),))
-                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_antes_fim_sol'", (str(novo_fim_sol),))
-                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_analise'", (str(novo_analise),))
-                                conn.execute("UPDATE configuracoes SET valor = ? WHERE chave = 'crono_dias_uteis_entrega'", (str(novo_entrega),))
+                                conn.execute("INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?, ?)", (key_override, valor_ov))
                             
-                            detalhe_log = (f"Parâmetros de cronograma alterados: Janela de solicitação={novo_inicio_sol} a {novo_fim_sol} dias antes; "
-                                           f"Lead time interno={novo_analise} dias úteis; Lead time fornecedor={novo_entrega} dias úteis.")
-                            registrar_log_auditoria(st.session_state["usuario_atual"], "Alterar Parâmetros Cronograma", detalhe_log)
-                            
-                            # Dispara o sincronismo e limpa caches
+                            registrar_log_auditoria(st.session_state["usuario_atual"], "Ajustar Data Ciclo", 
+                                                    f"Sobrescreveu data de solicitação para o ciclo {mes_c}/{ano_c}: {data_ini_input} a {data_fim_input}.")
                             disparar_sincronizacao()
-                            
-                            st.toast("Parâmetros salvos e sincronizados!", icon="✅")
-                            st.success("Configurações do cronograma atualizadas com sucesso!")
+                            st.toast("Datas salvas para este ciclo!", icon="✅")
+                            st.success(f"Janela de solicitação ajustada para {data_ini_input.strftime('%d/%m/%Y')} a {data_fim_input.strftime('%d/%m/%Y')}!")
                             st.rerun()
-                        except Exception as e_cfg:
-                            st.error(f"Erro ao salvar configurações no banco de dados: {e_cfg}")
+                        except Exception as e_ov:
+                            st.error(f"Erro ao salvar ajuste de data no banco: {e_ov}")
+                            
+                if limpar_ov:
+                    try:
+                        with get_conn() as conn:
+                            conn.execute("DELETE FROM configuracoes WHERE chave = ?", (key_override,))
+                        
+                        registrar_log_auditoria(st.session_state["usuario_atual"], "Restaurar Data Ciclo", 
+                                                f"Restaurou período padrão de solicitação para o ciclo {mes_c}/{ano_c}.")
+                        disparar_sincronizacao()
+                        st.toast("Datas restauradas para o padrão do ciclo!", icon="🔄")
+                        st.success("O ciclo voltou a usar a regra de dias calculados antes do final do mês!")
+                        st.rerun()
+                    except Exception as e_ov:
+                        st.error(f"Erro ao restaurar datas padrão: {e_ov}")
     else:
         st.info("🔒 **Painel de Configuração Reservado:** Apenas Administradores do sistema podem editar os prazos e parâmetros logísticos do cronograma de compras.")
