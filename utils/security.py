@@ -51,6 +51,13 @@ def verificar_e_atualizar_senha(usuario, senha_digitada, hash_armazenado):
             pass  # Não quebra o login se falhar ao atualizar o hash
     return valida
 
+def normalizar_usuario(usuario):
+    """Normaliza o nome de usuário para comparações e armazenamento consistentes."""
+    if not isinstance(usuario, str):
+        return ""
+    return usuario.strip().lower()
+
+
 def limpar_sessoes_expiradas():
     """
     Remove sessões que já expiraram (mais de 2 horas) da base de dados

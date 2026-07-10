@@ -182,6 +182,14 @@ if "db_sincronizado" not in st.session_state:
 # Inicia chaves de sessão na memória
 inicializar_estados_sessao()
 
+# Defaults do fluxo e controles reativos da UI
+if "metodo_consumo" not in st.session_state:
+    st.session_state["metodo_consumo"] = "movimentacoes"
+if "login_attempts" not in st.session_state:
+    st.session_state["login_attempts"] = 0
+if "recovery_attempts" not in st.session_state:
+    st.session_state["recovery_attempts"] = 0
+
 # --- CONTROLE DE EXPIRAÇÃO DE SESSÃO POR INATIVIDADE (30 MINUTOS) ---
 import time
 INACTIVITY_TIMEOUT = 1800  # 30 minutos em segundos

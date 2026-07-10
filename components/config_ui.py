@@ -160,6 +160,7 @@ def render_config_ui(df):
     col_tgl, col_btn1, col_btn2 = st.columns([2, 2, 2])
     with col_tgl:
         novo_sync = st.toggle("Sincronizar em segundo plano", value=sync_atual)
+        st.caption("Quando desligado, todas as ações continuam localmente e a nuvem não é atualizada. Use o botão de envio para sincronizar manualmente.")
     with col_btn1:
         if st.button("📤 Enviar para Nuvem", type="secondary", use_container_width=True):
             from datetime import datetime

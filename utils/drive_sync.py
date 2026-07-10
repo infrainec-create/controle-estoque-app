@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 from database.connection import get_conn, DB_PATH
 from database.queries import limpar_cache_consultas
+from utils.date_helpers import formatar_timestamp_utc
 
 _sync_lock = threading.Lock()
 _pending_sync = False
@@ -18,6 +19,24 @@ try:
     FOLDER_ID = st.secrets["FOLDER_ID"]
 except Exception:
     FOLDER_ID = "MOCK_FOLDER_ID"
+
+
+def _escape_drive_query_value(value):
+    if value is None:
+        return ""
+    return str(value).replace("'", "''")
+
+
+def _set_sync_status(sucesso, mensagem, chave='global'):
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES (?, ?, ?, ?)",
+                (chave, sucesso, mensagem, formatar_timestamp_utc())
+            )
+    except Exception:
+        pass
+
 
 def obter_servico_drive():
     if "gcp_service_account_custom" in st.session_state:
@@ -63,7 +82,9 @@ def obter_local_mtime():
 def obter_metadados_drive():
     try:
         servico = obter_servico_drive()
-        query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
+        db_name = _escape_drive_query_value(os.path.basename(DB_PATH))
+        folder_id = _escape_drive_query_value(FOLDER_ID)
+        query = f"name='{db_name}' and '{folder_id}' in parents and trashed=false"
         res = servico.files().list(
             q=query, 
             fields="files(id, name, modifiedTime, size)",
@@ -134,14 +155,7 @@ def sincronizar_banco_na_inicializacao():
             if (mtime_drive - mtime_local).total_seconds() > 2:
                 descarregar_do_drive()
     except Exception as e:
-        try:
-            with get_conn() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                    (f"Erro na sincronização de inicialização: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                )
-        except Exception:
-            pass
+        _set_sync_status(0, f"Erro na sincronização de inicialização: {e}")
 
 def executar_sincronizacao_drive():
     global _pending_sync
@@ -187,18 +201,15 @@ def _executar_sincronizacao_drive_interna():
                 mtime_drive = parsed_drive_time(mtime_drive_str)
                 mtime_local_sync = parsed_drive_time(ultimo_sync_local)
                 
-                # Se o arquivo na nuvem é mais recente do que a última sincronização que este cliente fez
                 if mtime_drive and mtime_local_sync and (mtime_drive - mtime_local_sync).total_seconds() > 2:
-                    with get_conn() as conn:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                            ("Conflito detectado! O banco de dados na nuvem foi modificado por outra sessão. Recarregue a página ou faça download manual.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                        )
+                    _set_sync_status(0, "Conflito detectado! O banco de dados na nuvem foi modificado por outra sessão. Recarregue a página ou faça download manual.")
                     return
         
         # 2. Upload Seguro do Banco de Dados (.db) com Retry (3 tentativas com Backoff)
         import time
-        query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
+        db_name = _escape_drive_query_value(os.path.basename(DB_PATH))
+        folder_id = _escape_drive_query_value(FOLDER_ID)
+        query = f"name='{db_name}' and '{folder_id}' in parents and trashed=false"
         
         upload_res = None
         for tentativa in range(3):
@@ -252,7 +263,9 @@ def _executar_sincronizacao_drive_interna():
                 backup_name = f"estoque_backup_{next_slot}.db"
                 
                 # 2. Procurar se o arquivo do slot já existe na pasta do Drive
-                query_slot = f"name='{backup_name}' and '{FOLDER_ID}' in parents and trashed=false"
+                backup_name_safe = _escape_drive_query_value(backup_name)
+                folder_id = _escape_drive_query_value(FOLDER_ID)
+                query_slot = f"name='{backup_name_safe}' and '{folder_id}' in parents and trashed=false"
                 res_slot = servico.files().list(
                     q=query_slot,
                     fields="files(id)",
@@ -293,11 +306,10 @@ def _executar_sincronizacao_drive_interna():
                             )
                     except Exception as e_create:
                         if "storageQuotaExceeded" in str(e_create) or "quota" in str(e_create).lower():
-                            # Não quebramos o fluxo, mas instruímos o usuário a criar o arquivo no Drive dele
                             with get_conn() as conn:
                                 conn.execute(
                                     "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('backup_warning', 0, ?, ?)",
-                                    (f"Aviso de Backup: Crie um arquivo vazio chamado '{backup_name}' no seu Google Drive pessoal para ativar este slot de backup.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+                                    (f"Aviso de Backup: Crie um arquivo vazio chamado '{backup_name}' no seu Google Drive pessoal para ativar este slot de backup.", formatar_timestamp_utc())
                                 )
                         else:
                             raise e_create
@@ -314,7 +326,9 @@ def _executar_sincronizacao_drive_interna():
             """, conn)
             
         for df, name in [(prods, "produtos_looker.csv"), (movs, "movimentacoes_looker.csv")]:
-            q = f"name='{name}' and '{FOLDER_ID}' in parents"
+            file_name_safe = _escape_drive_query_value(name)
+            folder_id = _escape_drive_query_value(FOLDER_ID)
+            q = f"name='{file_name_safe}' and '{folder_id}' in parents"
             for tentativa in range(3):
                 try:
                     fs = servico.files().list(
@@ -345,27 +359,14 @@ def _executar_sincronizacao_drive_interna():
                             raise Exception(f"Cota Excedida. Por favor, crie um arquivo vazio chamado '{name}' na sua pasta do Drive para ativar a gravação.")
                         raise e
             
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
-                ("Nuvem sincronizada com sucesso!", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-            )
+        _set_sync_status(1, "Nuvem sincronizada com sucesso!")
     except sqlite3.OperationalError as e:
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                (f"Banco de dados ocupado: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-            )
+        _set_sync_status(0, f"Banco de dados ocupado: {e}")
     except Exception as e:
         msg = str(e)
         if "storageQuotaExceeded" in msg or "do not have storage quota" in msg:
             msg = "Cota de armazenamento excedida. Contas de Serviço GCP não possuem cota própria no Drive pessoal. Crie arquivos em branco ou use um Drive Compartilhado."
-            
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                (f"Erro de comunicação Drive: {msg}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-            )
+        _set_sync_status(0, f"Erro de comunicação Drive: {msg}")
     finally:
         if os.path.exists(backup_db_path):
             try:
@@ -377,39 +378,27 @@ def disparar_sincronizacao():
     limpar_cache_consultas()
     
     if st.session_state.get("db_sincronizado") == "local":
-        try:
-            with get_conn() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
-                    ("Modo Offline: Sincronização desativada.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                )
-        except Exception:
-            pass
+        _set_sync_status(1, "Modo Offline: Sincronização desativada.")
         return
         
     try:
         with get_conn() as conn:
             row = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'drive_sync_ativo'").fetchone()
             if row and row[0] == '0':
-                conn.execute(
-                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
-                    ("Sincronização na nuvem desativada localmente.", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                )
+                _set_sync_status(1, "Sincronização na nuvem desativada localmente.")
                 return
     except Exception:
         pass
 
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
-            ("Sincronizando em segundo plano...", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-        )
+    _set_sync_status(1, "Sincronizando em segundo plano...")
     threading.Thread(target=executar_sincronizacao_drive).start()
 
 def descarregar_do_drive():
     try:
         servico = obter_servico_drive()
-        query = f"name='{os.path.basename(DB_PATH)}' and '{FOLDER_ID}' in parents and trashed=false"
+        db_name = _escape_drive_query_value(os.path.basename(DB_PATH))
+        folder_id = _escape_drive_query_value(FOLDER_ID)
+        query = f"name='{db_name}' and '{folder_id}' in parents and trashed=false"
         res = servico.files().list(
             q=query, 
             fields="files(id, modifiedTime)",
@@ -452,21 +441,13 @@ def descarregar_do_drive():
             
             salvar_ultimo_sync_time_local(file_meta.get('modifiedTime'))
             
-            with get_conn() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 1, ?, ?)",
-                    ("Banco de dados baixado da nuvem com sucesso!", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                )
+            _set_sync_status(1, "Banco de dados baixado da nuvem com sucesso!")
             limpar_cache_consultas()
             return True
     except Exception as e:
         try:
             if os.path.exists(DB_PATH):
-                with get_conn() as conn:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO status_sincronismo (chave, sucesso, mensagem, timestamp) VALUES ('global', 0, ?, ?)",
-                        (f"Erro ao baixar da nuvem: {e}", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-                    )
+                _set_sync_status(0, f"Erro ao baixar da nuvem: {e}")
         except Exception:
             pass
         return False

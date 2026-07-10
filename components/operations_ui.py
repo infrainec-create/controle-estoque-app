@@ -1,9 +1,7 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import streamlit as st
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
-from database.queries import registrar_log_auditoria
+from database.queries import registrar_log_auditoria, registrar_entrada_produto, registrar_saida_produto
 from utils.backup import realizar_backup_local
 
 def render_operations_ui(df):
@@ -29,21 +27,17 @@ def render_operations_ui(df):
             obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
                 
             if st.button("Confirmar Entrada", type="secondary"):
-                total_novas_unidades = sal_e + qe
-                novo_pmp = ((sal_e * pmp_antigo) + (qe * preco_compra)) / total_novas_unidades if total_novas_unidades > 0 else preco_compra
-                with get_conn() as conn:
-                    conn.execute("UPDATE produtos SET saldo_atual = saldo_atual + ?, valor_unitario = ? WHERE id = ?", (qe, novo_pmp, id_pe))
-                    data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                    obs_completa = f"{obs_e} | Pago: R$ {preco_compra:.2f}/un" if obs_e.strip() else f"Pago: R$ {preco_compra:.2f}/un"
-                    conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)", (id_pe, data, qe, total_novas_unidades, obs_completa))
-                
-                detalhes_log = f"Registrou entrada de {qe} un. do insumo '{sel_e}' (PMP anterior: R$ {pmp_antigo:.2f}, novo PMP: R$ {novo_pmp:.2f}). Preço Pago: R$ {preco_compra:.2f}/un. Total: R$ {qe * preco_compra:.2f}."
-                registrar_log_auditoria(st.session_state["usuario_atual"], "Entrada de Estoque", detalhes_log)
-                
-                realizar_backup_local()
-                disparar_sincronizacao()
-                st.toast(f"📥 Entrada registrada! Novo PMP: R$ {novo_pmp:.2f}", icon="✅")
-                st.rerun()
+                sucesso_ent, msg_ent = registrar_entrada_produto(id_pe, qe, preco_compra, obs_e)
+                if sucesso_ent:
+                    detalhes_log = f"Registrou entrada de {qe} un. do insumo '{sel_e}' (Preço Pago: R$ {preco_compra:.2f}/un; Total: R$ {qe * preco_compra:.2f})."
+                    registrar_log_auditoria(st.session_state["usuario_atual"], "Entrada de Estoque", detalhes_log)
+
+                    realizar_backup_local()
+                    disparar_sincronizacao()
+                    st.toast("📥 Entrada registrada com sucesso!", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao registrar entrada: {msg_ent}")
 
     with col_s:
         with st.container(border=True):
@@ -74,15 +68,14 @@ def render_operations_ui(df):
                 st.success(f"🟢 Saldo seguro após retirada: {saldo_futuro} un (Estoque Mínimo: {est_min_s} un).")
                 
             if st.button("Confirmar Saída", type="primary", disabled=bloquear_saida):
-                with get_conn() as conn:
-                    conn.execute("UPDATE produtos SET saldo_atual = saldo_atual - ? WHERE id = ?", (q, id_p))
-                    data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
-                    conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)", (id_p, data, -q, max_s - q, obs_s))
-                
-                detalhes_log = f"Registrou saída de {q} un. do insumo '{sel}' (Observação: '{obs_s}'). Saldo restante: {max_s - q} un."
-                registrar_log_auditoria(st.session_state["usuario_atual"], "Saída de Estoque", detalhes_log)
-                
-                realizar_backup_local()
-                disparar_sincronizacao()
-                st.toast(f"📤 Baixa realizada com sucesso!", icon="🚀")
-                st.rerun()
+                sucesso_saida, msg_saida = registrar_saida_produto(id_p, q, obs_s)
+                if sucesso_saida:
+                    detalhes_log = f"Registrou saída de {q} un. do insumo '{sel}' (Observação: '{obs_s}'). Saldo restante estimado: {max_s - q} un."
+                    registrar_log_auditoria(st.session_state["usuario_atual"], "Saída de Estoque", detalhes_log)
+
+                    realizar_backup_local()
+                    disparar_sincronizacao()
+                    st.toast("📤 Baixa realizada com sucesso!", icon="🚀")
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao registrar saída: {msg_saida}")
