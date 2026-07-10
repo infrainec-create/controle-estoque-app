@@ -59,6 +59,11 @@ def render_ai_assistant_ui(df):
         from utils.consumption import processar_consumo_produtos
         df_prev = processar_consumo_produtos(df, metodo, 30)
         
+        # Calcular Runway (Cobertura de estoque em dias)
+        mask_runway = df_prev['consumo_diario'] > 0
+        df_prev['Runway'] = 999
+        df_prev.loc[mask_runway, 'Runway'] = (df_prev.loc[mask_runway, 'saldo_atual'] / df_prev.loc[mask_runway, 'consumo_diario']).astype(int)
+        
         # Definição matemática de gatilho de compra
         def set_gatilho(row):
             saldo = row['saldo_atual']
