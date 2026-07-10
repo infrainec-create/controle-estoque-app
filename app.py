@@ -292,7 +292,7 @@ else:
             
         # Cronômetro de Sessão regressivo em tempo real
         import streamlit.components.v1 as components
-        timer_html = """
+        timer_html = f"<!-- timestamp: {int(st.session_state['ultimo_acesso'])} -->\n" + """
         <div style="
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             padding: 10px 14px;
@@ -338,7 +338,7 @@ else:
             }, 1000);
         </script>
         """
-        components.html(timer_html, height=105, key=f"session_timer_{int(st.session_state['ultimo_acesso'])}")
+        components.html(timer_html, height=105)
             
         # Leitura reativa do status de sincronia assíncrona gravado no SQLite
         if st.session_state.get("db_sincronizado") == "local":
