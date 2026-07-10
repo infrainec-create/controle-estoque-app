@@ -217,28 +217,35 @@ def render_schedule_ui(df):
         ano_anterior = ano_c
         mes_anterior = mes_c - 1
         
-    pattern_anterior = f"%/{mes_anterior:02d}/{ano_anterior}%"
+    # Definir os limites temporais do mês anterior para o cálculo
+    t_start = datetime.datetime(ano_anterior, mes_anterior, 1)
+    t_end = datetime.datetime(ano_c, mes_c, 1)
     
-    # 2. Consultar o consumo (saídas) real ocorrido no mês anterior para usar como projeção
-    with get_conn() as conn:
-        cursor_movs = conn.execute("""
-            SELECT id_produto, SUM(ABS(quantidade)) 
-            FROM movimentacoes 
-            WHERE (tipo='Saída' OR (tipo='Contagem' AND quantidade < 0))
-              AND data_hora LIKE ?
-            GROUP BY id_produto
-        """, (pattern_anterior,)).fetchall()
+    metodo = st.session_state.get("metodo_consumo", "movimentacoes")
+    
+    from utils.consumption import obter_movimentacoes_processadas, calcular_consumo_intervalo
+    try:
+        with get_conn() as conn:
+            movs = obter_movimentacoes_processadas(conn)
+    except Exception:
+        movs = pd.DataFrame()
         
-        # Se não houver consumo no mês anterior (ex: novos insumos), usa histórico total como fallback
-        cons_dict = dict(cursor_movs) if cursor_movs and sum(r[1] for r in cursor_movs) > 0 else {}
-        if not cons_dict:
-            cursor_fallback = conn.execute("""
-                SELECT id_produto, SUM(ABS(quantidade)) 
-                FROM movimentacoes 
-                WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
-                GROUP BY id_produto
-            """).fetchall()
-            cons_dict = dict(cursor_fallback) if cursor_fallback else {}
+    cons_dict = {}
+    if not movs.empty:
+        for _, row in df.iterrows():
+            p_id = row['id']
+            prod_movs = movs[movs['id_produto'] == p_id]
+            consumo = calcular_consumo_intervalo(prod_movs, t_start, t_end, metodo)
+            
+            # Se der 0 e não houver nenhuma movimentação anterior no intervalo, 
+            # fazemos um fallback para o histórico total
+            if consumo == 0:
+                t_init = datetime.datetime(1970, 1, 1)
+                t_now = datetime.datetime.now()
+                consumo_fallback = calcular_consumo_intervalo(prod_movs, t_init, t_now, metodo)
+                if consumo_fallback > 0:
+                    consumo = consumo_fallback
+            cons_dict[p_id] = consumo
             
     # 3. Projetar consumo para o mês do ciclo
     df['consumo_projetado'] = df['id'].map(cons_dict).fillna(0).astype(int)

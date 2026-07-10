@@ -207,6 +207,79 @@ class TestWMSRegression(unittest.TestCase):
         previsao_tarde = calcular_previsao_entrega(hoje_tarde)
         self.assertEqual(previsao_tarde["mes_alvo"], 8)
 
+    def test_06_consumption_calculation(self):
+        print("Teste 6: Validando cálculo de consumo e previsão (Movimentações vs Inventário)...")
+        from utils.consumption import processar_consumo_produtos
+        from database.connection import get_conn
+        
+        # A. Cadastrar produto de teste para consumo
+        sucesso, msg = cadastrar_produto(
+            nome="Produto Consumo Teste",
+            estoque_minimo=10,
+            valor_unitario=10.0,
+            categoria="Geral",
+            lead_time=3
+        )
+        self.assertTrue(sucesso)
+        
+        st.cache_data.clear()
+        
+        # Obter o id do produto cadastrado
+        df_produtos = listar_produtos()
+        prod_row = df_produtos[df_produtos["nome"] == "Produto Consumo Teste"]
+        self.assertEqual(len(prod_row), 1)
+        id_produto = int(prod_row.iloc[0]["id"])
+        
+        # B. Inserir movimentações para testar as fórmulas
+        import datetime
+        hoje = datetime.datetime.now()
+        
+        dt_1 = (hoje - datetime.timedelta(days=20)).strftime("%d/%m/%Y %H:%M")
+        dt_2 = (hoje - datetime.timedelta(days=15)).strftime("%d/%m/%Y %H:%M")
+        dt_3 = (hoje - datetime.timedelta(days=10)).strftime("%d/%m/%Y %H:%M")
+        dt_4 = (hoje - datetime.timedelta(days=5)).strftime("%d/%m/%Y %H:%M")
+        
+        with get_conn() as conn:
+            # Contagem inicial: +50 un
+            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', 50, 50, 'Contagem inicial')", (id_produto, dt_1))
+            # Entrada: +20 un (saldo vai para 70)
+            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', 20, 70, 'Compra')", (id_produto, dt_2))
+            # Saída: -10 un (saldo vai para 60)
+            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', -10, 60, 'Venda/Saída')", (id_produto, dt_3))
+            # Contagem final: saldo_resultante=55 (divergência de -5 un)
+            conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', -5, 55, 'Ajuste')", (id_produto, dt_4))
+            
+            # Atualizar saldo_atual do produto
+            conn.execute("UPDATE produtos SET saldo_atual = 55 WHERE id = ?", (id_produto,))
+            
+        st.cache_data.clear()
+        
+        # Testar método "movimentacoes"
+        # Deve somar: Saída (10) + Contagem negativa (5) = 15
+        df_p = listar_produtos()
+        df_res_mov = processar_consumo_produtos(df_p, 'movimentacoes', 30)
+        prod_mov = df_res_mov[df_res_mov["id"] == id_produto].iloc[0]
+        self.assertEqual(int(prod_mov['total']), 15)
+        
+        # Testar método "inventario"
+        # Saldo inicial (antes de 30 dias) = 0
+        # Saldo final = 55
+        # Adições (Entrada 20 + Contagem inicial 50) = 70
+        # Consumo = 0 + 70 - 55 = 15
+        df_res_inv = processar_consumo_produtos(df_p, 'inventario', 30)
+        prod_inv = df_res_inv[df_res_inv["id"] == id_produto].iloc[0]
+        self.assertEqual(int(prod_inv['total']), 15)
+        
+        # Confirmar que colunas adicionais existem
+        self.assertIn('consumo_s1', df_res_inv.columns)
+        self.assertIn('consumo_s2', df_res_inv.columns)
+        self.assertIn('consumo_s3', df_res_inv.columns)
+        self.assertIn('tendencia', df_res_inv.columns)
+        
+        # Limpar
+        deletar_produto(id_produto)
+        st.cache_data.clear()
+
 if __name__ == "__main__":
     print("======================================================================")
     print(" INICIANDO BATERIA DE TESTES DE REGRESSÃO DE INTEGRAÇÃO - WMS 5.0 ")

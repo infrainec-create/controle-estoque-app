@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
+from utils.consumption import processar_consumo_produtos
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
     layout_update = dict(
@@ -66,7 +67,7 @@ def render_dashboard_ui(df):
 
     # 3. Controles Logísticos Dinâmicos (Expander no topo do painel)
     with st.expander("⚙️ Parâmetros Logísticos Avançados (Janela de Consumo & Coberturas por Setor)", expanded=False):
-        col_janela, col_margens = st.columns([1, 2])
+        col_janela, col_metodo, col_margens = st.columns([1, 1.2, 1.8])
         with col_janela:
             st.markdown("**📅 Ritmo de Consumo**")
             janela_dias = st.select_slider(
@@ -75,6 +76,16 @@ def render_dashboard_ui(df):
                 value=30,
                 format_func=lambda x: f"{x} dias"
             )
+        with col_metodo:
+            st.markdown("**📋 Método de Cálculo**")
+            metodo_consumo_lbl = st.radio(
+                "Origem do consumo:",
+                options=["Saídas Registradas", "Inventário (Diferenças)"],
+                index=0,
+                help="Saídas Registradas: soma as Saídas manuais e divergências de perda.\nInventário (Diferenças): calcula o consumo pela variação do saldo físico entre contagens semanais."
+            )
+            metodo_consumo = "movimentacoes" if metodo_consumo_lbl == "Saídas Registradas" else "inventario"
+            st.session_state["metodo_consumo"] = metodo_consumo
         with col_margens:
             st.markdown("**🎯 Fatores de Segurança Ativos por Setor**")
             st.caption("Margens definidas na aba de Configurações")
@@ -84,30 +95,8 @@ def render_dashboard_ui(df):
                 val_f = fatores_setor.get(s, padroes.get(s, 1.1))
                 cols_f[i].metric(s, f"{val_f}x")
 
-    # 4. Cálculo de Consumo diário baseado na janela temporal selecionada
-    with get_conn() as conn:
-        movs = pd.read_sql("""
-            SELECT id_produto, data_hora, quantidade
-            FROM movimentacoes 
-            WHERE tipo='Saída' OR (tipo='Contagem' AND quantidade < 0)
-        """, conn)
-        
-    cons_dict = {}
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    
-    if not movs.empty:
-        movs['dt'] = pd.to_datetime(movs['data_hora'], format='%d/%m/%Y %H:%M', errors='coerce')
-        agora = datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
-        limite = agora - pd.Timedelta(days=janela_dias)
-        movs_filtradas = movs[movs['dt'] >= limite]
-        
-        if not movs_filtradas.empty:
-            cons = movs_filtradas.groupby('id_produto')['quantidade'].apply(lambda x: x.abs().sum()).reset_index(name='total')
-            cons_dict = dict(zip(cons['id_produto'], cons['total']))
-            
-    df['total'] = df['id'].map(cons_dict).fillna(0)
-    df['consumo_diario'] = df['total'] / janela_dias
+    # 4. Cálculo de Consumo diário baseado na janela temporal e método selecionados
+    df = processar_consumo_produtos(df, metodo_consumo, janela_dias)
     
     # Cálculos Logísticos para Ponto de Pedido Automático e Estoque de Segurança
     def obter_fator_setor(row):
@@ -499,12 +488,20 @@ def render_dashboard_ui(df):
     df_compras["criticidade"] = df_compras["criticidade"].fillna("Y").str.upper()
     
     st.dataframe(
-        df_compras[["categoria", "nome", "criticidade", "saldo_atual", "Ponto_Pedido", "Minimo Ideal", "Sugestão Compra", "Previsão de Entrega"]].rename(
+        df_compras[[
+            "categoria", "nome", "criticidade", "saldo_atual", 
+            "consumo_s3", "consumo_s2", "consumo_s1", "tendencia",
+            "Ponto_Pedido", "Minimo Ideal", "Sugestão Compra", "Previsão de Entrega"
+        ]].rename(
             columns={
                 "categoria": "Setor", 
                 "nome": "Produto", 
                 "criticidade": "Crit.",
                 "saldo_atual": "Saldo Físico", 
+                "consumo_s3": "Consumo S-3 (3 sem atrás)",
+                "consumo_s2": "Consumo S-2 (2 sem atrás)",
+                "consumo_s1": "Consumo S-1 (Última sem)",
+                "tendencia": "Tendência",
                 "Ponto_Pedido": "Ponto de Pedido",
                 "Minimo Ideal": "Est. Segurança", 
                 "Sugestão Compra": "Sugestão Compra",
