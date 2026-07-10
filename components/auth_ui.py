@@ -2,14 +2,18 @@ import uuid
 from datetime import datetime
 import streamlit as st
 from database.connection import get_conn
-from utils.security import gerar_hash_senha
+from utils.security import gerar_hash_senha, normalizar_usuario
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
 
 def render_auth_ui():
     st.title("🔒 WMS Inteligente - Controle de Acesso")
     st.caption("Autenticação obrigatória para acesso à base operacional.")
-    
+
+    st.session_state.setdefault("login_attempts", 0)
+    st.session_state.setdefault("recovery_attempts", 0)
+    max_attempts = 5
+
     aba_login, aba_cadastro, aba_recuperar = st.tabs(["🔑 Entrar no Sistema", "👤 Criar Conta", "🛠️ Esqueci a Senha"])
     
     with aba_login:
@@ -19,15 +23,18 @@ def render_auth_ui():
             btn_login = st.form_submit_button("Acessar WMS")
             
             if btn_login:
-                if usr_input and pass_input:
+                if st.session_state["login_attempts"] >= max_attempts:
+                    st.error("Você excedeu o número máximo de tentativas de login. Tente novamente mais tarde.")
+                elif usr_input and pass_input:
+                    usr_input_norm = normalizar_usuario(usr_input)
                     with get_conn() as conn:
-                        res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input,)).fetchone()
+                        res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
                     
                     from utils.security import verificar_e_atualizar_senha
                     if res and verificar_e_atualizar_senha(res[3], pass_input, res[2]):
                         aprovado, perfil, _, db_usr = res
+                        st.session_state["login_attempts"] = 0
                         if aprovado == 1:
-                            # Geração e persistência da sessão no banco de dados e URL
                             session_token = str(uuid.uuid4())
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             with get_conn() as conn:
@@ -47,7 +54,9 @@ def render_auth_ui():
                         else:
                             st.error("⏳ Seu cadastro está pendente de aprovação. Solicite ao administrador a liberação do seu acesso.")
                     else:
-                        st.error("❌ Usuário ou senha incorretos. Verifique suas credenciais.")
+                        st.session_state["login_attempts"] += 1
+                        tentativas_restantes = max_attempts - st.session_state["login_attempts"]
+                        st.error(f"❌ Usuário ou senha incorretos. Tente novamente. Restam {tentativas_restantes} tentativas.")
                 else:
                     st.warning("Preencha todos os campos para fazer o login.")
                     
@@ -69,19 +78,18 @@ def render_auth_ui():
             if btn_cadastrar:
                 if new_usr and new_pass and resposta:
                     import re
-                    # Validação de complexidade da senha (mínimo 8 caracteres, pelo menos uma letra e um número)
                     if len(new_pass) < 8 or not re.search(r"[a-zA-Z]", new_pass) or not re.search(r"\d", new_pass):
                         st.error("❌ A senha deve conter pelo menos 8 caracteres, incluindo pelo menos uma letra e um número.")
                     else:
+                        cleaned_username = normalizar_usuario(new_usr)
+                        normalized_response = resposta.lower().strip()
                         try:
                             with get_conn() as conn:
-                                # Verificação case-insensitive de existência de usuário
-                                exists = conn.execute("SELECT 1 FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (new_usr,)).fetchone()
+                                exists = conn.execute("SELECT 1 FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (cleaned_username,)).fetchone()
                                 
                                 if exists:
                                     st.error("❌ Esse nome de usuário já existe na base. Tente uma combinação diferente.")
                                 else:
-                                    # Se for o primeiro usuário no banco, torna-se administrador automaticamente (bootstrap seguro)
                                     total_usuarios = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
                                     if total_usuarios == 0:
                                         status_inicial = 1
@@ -89,19 +97,19 @@ def render_auth_ui():
                                     else:
                                         status_inicial = 0
                                         perfil_inicial = "Operador"
-                                        
+                                         
                                     conn.execute(
                                         "INSERT INTO usuarios (usuario, senha_hash, pergunta_seguranca, resposta_seguranca_hash, aprovado, perfil) VALUES (?, ?, ?, ?, ?, ?)",
-                                        (new_usr, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(resposta), status_inicial, perfil_inicial)
+                                        (cleaned_username, gerar_hash_senha(new_pass), pergunta, gerar_hash_senha(normalized_response), status_inicial, perfil_inicial)
                                     )
-                                    
-                                    registrar_log_auditoria(new_usr if status_inicial == 1 else "Sistema", "Solicitação de Cadastro", f"Solicitação de cadastro enviada para o usuário '{new_usr}' (Perfil inicial: {perfil_inicial}, Aprovado: {'Sim' if status_inicial == 1 else 'Não'}).")
-                                    
+                                     
+                                    registrar_log_auditoria(cleaned_username if status_inicial == 1 else "Sistema", "Solicitação de Cadastro", f"Solicitação de cadastro enviada para o usuário '{cleaned_username}' (Perfil inicial: {perfil_inicial}, Aprovado: {'Sim' if status_inicial == 1 else 'Não'}).")
+                                     
                                     disparar_sincronizacao()
                                     if status_inicial == 1:
                                         st.success("👑 Conta de administrador master criada! Vá para a aba Entrar e realize o login.")
                                     else:
-                                        st.success(f"⏳ Solicitação enviada! O usuário '{new_usr}' foi colocado na fila de aceitação do Administrador.")
+                                        st.success(f"⏳ Solicitação enviada! O usuário '{cleaned_username}' foi colocado na fila de aceitação do Administrador.")
                         except Exception as e:
                             st.error(f"❌ Ocorreu um erro ao registrar a conta: {e}")
                 else:
@@ -109,37 +117,44 @@ def render_auth_ui():
                     
     with aba_recuperar:
         st.subheader("== Redefinição de Credencial ==")
-        usr_recup = st.text_input("Digite o usuário que deseja redefinir:").strip()
-        
-        if usr_recup:
-            with get_conn() as conn:
-                dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup,)).fetchone()
-            
-            if dados_usr:
-                db_usr = dados_usr[3]
-                st.info(f"Pergunta de Segurança: **{dados_usr[0]}**")
-                resp_recup = st.text_input("Digite a sua resposta secreta:", type="password").strip().lower()
-                nova_senha = st.text_input("Digite a sua Nova Senha:", type="password")
-                
-                if st.button("💾 Gravar Nova Senha"):
-                    if resp_recup and nova_senha:
-                        import re
-                        if len(nova_senha) < 8 or not re.search(r"[a-zA-Z]", nova_senha) or not re.search(r"\d", nova_senha):
-                            st.error("❌ A nova senha deve conter pelo menos 8 caracteres, incluindo pelo menos uma letra e um número.")
-                        else:
-                            from utils.security import verificar_senha
-                            hash_salvo_resp = dados_usr[2]
-                            if verificar_senha(resp_recup, hash_salvo_resp):
-                                with get_conn() as conn:
-                                    conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
-                                
-                                registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
-                                
-                                disparar_sincronizacao()
-                                st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+        if st.session_state["recovery_attempts"] >= max_attempts:
+            st.error("Você excedeu o número máximo de tentativas de recuperação de senha. Tente novamente mais tarde.")
+        else:
+            usr_recup = st.text_input("Digite o usuário que deseja redefinir:").strip()
+             
+            if usr_recup:
+                usr_recup_norm = normalizar_usuario(usr_recup)
+                with get_conn() as conn:
+                    dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
+                 
+                if dados_usr:
+                    db_usr = dados_usr[3]
+                    st.info(f"Pergunta de Segurança: **{dados_usr[0]}**")
+                    resp_recup = st.text_input("Digite a sua resposta secreta:", type="password").strip().lower()
+                    nova_senha = st.text_input("Digite a sua Nova Senha:", type="password")
+                     
+                    if st.button("💾 Gravar Nova Senha"):
+                        if resp_recup and nova_senha:
+                            import re
+                            if len(nova_senha) < 8 or not re.search(r"[a-zA-Z]", nova_senha) or not re.search(r"\d", nova_senha):
+                                st.error("❌ A nova senha deve conter pelo menos 8 caracteres, incluindo pelo menos uma letra e um número.")
                             else:
-                                st.error("❌ Resposta de segurança incorreta. Tente novamente.")
-                    else:
-                        st.warning("Preencha a resposta e a nova senha.")
-            else:
-                st.error("Usuário não encontrado na base do sistema.")
+                                from utils.security import verificar_senha
+                                hash_salvo_resp = dados_usr[2]
+                                if verificar_senha(resp_recup, hash_salvo_resp):
+                                    with get_conn() as conn:
+                                        conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
+                                     
+                                    st.session_state["recovery_attempts"] = 0
+                                    registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
+                                     
+                                    disparar_sincronizacao()
+                                    st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+                                else:
+                                    st.session_state["recovery_attempts"] += 1
+                                    tentativas_restantes = max_attempts - st.session_state["recovery_attempts"]
+                                    st.error(f"❌ Resposta de segurança incorreta. Tente novamente. Restam {tentativas_restantes} tentativas.")
+                        else:
+                            st.warning("Preencha a resposta secreta e a nova senha para continuar.")
+                else:
+                    st.error("Usuário não encontrado na base do sistema.")

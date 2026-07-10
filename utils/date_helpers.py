@@ -1,5 +1,18 @@
 import datetime
+from datetime import datetime as dt, timezone
 from database.connection import get_conn
+
+def formatar_timestamp_utc(data_hora=None, padrao="%d/%m/%Y %H:%M:%S"):
+    """Retorna a data/hora atual em UTC no formato especificado."""
+    if data_hora is None:
+        data_hora = dt.now(timezone.utc)
+    elif isinstance(data_hora, datetime.datetime):
+        data_hora = data_hora.astimezone(timezone.utc)
+    return data_hora.strftime(padrao)
+
+def normalizar_usuario(usuario):
+    """Normaliza o nome de usuário para comparação e armazenamento consistente."""
+    return usuario.strip().lower() if isinstance(usuario, str) else ""
 
 def obter_parametros_cronograma():
     params = {

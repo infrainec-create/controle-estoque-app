@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from database.connection import get_conn, retry_db_operation
+from utils.date_helpers import formatar_timestamp_utc
 
 @st.cache_data
 def listar_produtos():
@@ -50,8 +51,61 @@ def deletar_produto(id_produto):
         return False, str(e)
 
 @retry_db_operation()
+def registrar_entrada_produto(id_produto, quantidade, preco_unitario, observacao=""):
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT saldo_atual, valor_unitario FROM produtos WHERE id = ?", (id_produto,)).fetchone()
+            if not row:
+                return False, "Produto não encontrado."
+
+            saldo_atual, valor_atual = row
+            novo_saldo = saldo_atual + quantidade
+            novo_pmp = ((saldo_atual * valor_atual) + (quantidade * preco_unitario)) / novo_saldo if novo_saldo > 0 else preco_unitario
+            data = formatar_timestamp_utc()
+            obs_completa = f"{observacao} | Pago: R$ {preco_unitario:.2f}/un" if observacao.strip() else f"Pago: R$ {preco_unitario:.2f}/un"
+
+            conn.execute(
+                "UPDATE produtos SET saldo_atual = ?, valor_unitario = ? WHERE id = ?",
+                (novo_saldo, novo_pmp, id_produto)
+            )
+            conn.execute(
+                "INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)",
+                (id_produto, data, quantidade, novo_saldo, obs_completa)
+            )
+        return True, "Sucesso"
+    except Exception as e:
+        return False, str(e)
+
+@retry_db_operation()
+def registrar_saida_produto(id_produto, quantidade, observacao=""):
+    try:
+        with get_conn() as conn:
+            row = conn.execute("SELECT saldo_atual FROM produtos WHERE id = ?", (id_produto,)).fetchone()
+            if not row:
+                return False, "Produto não encontrado."
+
+            saldo_atual = row[0]
+            if quantidade > saldo_atual:
+                return False, "Estoque insuficiente para a retirada solicitada."
+
+            novo_saldo = saldo_atual - quantidade
+            data = formatar_timestamp_utc()
+            obs_final = observacao.strip() if observacao.strip() else ""
+
+            conn.execute(
+                "UPDATE produtos SET saldo_atual = ? WHERE id = ?",
+                (novo_saldo, id_produto)
+            )
+            conn.execute(
+                "INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)",
+                (id_produto, data, -quantidade, novo_saldo, obs_final)
+            )
+        return True, "Sucesso"
+    except Exception as e:
+        return False, str(e)
+
+@retry_db_operation()
 def registrar_log_auditoria(usuario, acao, detalhes=""):
-    from datetime import datetime
     import streamlit as st
     
     # Rastreamento de metadados de rede/cliente do Streamlit 1.30+
@@ -69,7 +123,7 @@ def registrar_log_auditoria(usuario, acao, detalhes=""):
         with get_conn() as conn:
             conn.execute(
                 "INSERT INTO logs_auditoria (usuario, acao, data_hora, detalhes, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)",
-                (usuario, acao, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), detalhes, client_ip, user_agent)
+                (usuario, acao, formatar_timestamp_utc(), detalhes, client_ip, user_agent)
             )
         return True
     except Exception:
@@ -78,7 +132,7 @@ def registrar_log_auditoria(usuario, acao, detalhes=""):
             with get_conn() as conn:
                 conn.execute(
                     "INSERT INTO logs_auditoria (usuario, acao, data_hora, detalhes) VALUES (?, ?, ?, ?)",
-                    (usuario, acao, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), detalhes)
+                    (usuario, acao, formatar_timestamp_utc(), detalhes)
                 )
             return True
         except Exception:

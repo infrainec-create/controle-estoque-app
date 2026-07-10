@@ -26,9 +26,11 @@ from database.queries import (
     cadastrar_produto,
     editar_produto,
     deletar_produto,
-    registrar_log_auditoria
+    registrar_log_auditoria,
+    registrar_entrada_produto,
+    registrar_saida_produto
 )
-from utils.security import gerar_hash_senha
+from utils.security import gerar_hash_senha, normalizar_usuario
 from utils.reports import (
     gerar_excel_estoque,
     gerar_excel_movimentacoes,
@@ -277,6 +279,44 @@ class TestWMSRegression(unittest.TestCase):
         self.assertIn('tendencia', df_res_inv.columns)
         
         # Limpar
+        deletar_produto(id_produto)
+        st.cache_data.clear()
+
+    def test_07_negative_stock_protection(self):
+        print("Teste 7: Validando bloqueio de saída quando há estoque insuficiente...")
+        sucesso, msg = cadastrar_produto(
+            nome="Produto Saida Negativa Teste",
+            estoque_minimo=5,
+            valor_unitario=10.0,
+            categoria="Geral",
+            lead_time=3
+        )
+        self.assertTrue(sucesso)
+        st.cache_data.clear()
+
+        df_produtos = listar_produtos()
+        row = df_produtos[df_produtos["nome"] == "Produto Saida Negativa Teste"].iloc[0]
+        id_produto = int(row["id"])
+
+        sucesso_saida, msg_saida = registrar_saida_produto(id_produto, 1, "Tentativa em estoque zero")
+        self.assertFalse(sucesso_saida)
+        self.assertIn("Estoque insuficiente", msg_saida)
+
+        with database.connection.get_conn() as conn:
+            saldo = conn.execute("SELECT saldo_atual FROM produtos WHERE id = ?", (id_produto,)).fetchone()[0]
+        self.assertEqual(saldo, 0)
+
+        # Ainda deve permitir saída quando houver saldo suficiente
+        sucesso_ent, msg_ent = registrar_entrada_produto(id_produto, 10, 5.0, "Compra para teste")
+        self.assertTrue(sucesso_ent)
+
+        sucesso_saida, msg_saida = registrar_saida_produto(id_produto, 5, "Saída válida")
+        self.assertTrue(sucesso_saida)
+
+        with database.connection.get_conn() as conn:
+            saldo_final = conn.execute("SELECT saldo_atual FROM produtos WHERE id = ?", (id_produto,)).fetchone()[0]
+        self.assertEqual(saldo_final, 5)
+
         deletar_produto(id_produto)
         st.cache_data.clear()
 
