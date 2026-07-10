@@ -124,7 +124,7 @@ def gerar_excel_estoque(df):
     # Runway (Cobertura em dias)
     df_export["Runway"] = 999
     mask_consumo = df_export["consumo_diario"] > 0
-    df_export.loc[mask_consumo, "Runway"] = (df_export.loc[mask_consumo, "saldo_atual"] / df_export["consumo_diario"]).astype(int)
+    df_export.loc[mask_consumo, "Runway"] = (df_export.loc[mask_consumo, "saldo_atual"] / df_export.loc[mask_consumo, "consumo_diario"]).astype(int)
     df_export["Runway_Txt"] = df_export["Runway"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
     
     # Sugestão de Compra
@@ -339,7 +339,7 @@ def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
     # Runway (Cobertura em dias)
     df_calc["Runway"] = 999
     mask_consumo = df_calc["consumo_diario"] > 0
-    df_calc.loc[mask_consumo, "Runway"] = (df_calc.loc[mask_consumo, "saldo_atual"] / df_calc["consumo_diario"]).astype(int)
+    df_calc.loc[mask_consumo, "Runway"] = (df_calc.loc[mask_consumo, "saldo_atual"] / df_calc.loc[mask_consumo, "consumo_diario"]).astype(int)
     
     # Minimo Ideal e Sugestão de Compra
     df_calc["Minimo_Ideal"] = df_calc["Estoque_Seguranca"]
