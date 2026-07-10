@@ -5,6 +5,7 @@ import datetime
 from datetime import datetime as dt_class
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+from database.connection import get_conn
 
 def formatar_aba_excel(ws, title_color="1E3A8A"):
     """
