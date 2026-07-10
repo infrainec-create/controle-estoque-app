@@ -57,27 +57,119 @@ def formatar_aba_excel(ws, title_color="1E3A8A"):
 
 def gerar_excel_estoque(df):
     """
-    Gera arquivo Excel (.xlsx) premium contendo a posição de estoque e valuation de ativos.
+    Gera arquivo Excel (.xlsx) premium contendo a posição de estoque, valuation de ativos e métricas de suprimentos.
     """
+    import numpy as np
+    from utils.consumption import processar_consumo_produtos
+    
+    # 1. Carrega método da sessão ou usa padrão
+    metodo = "movimentacoes"
+    janela_dias = 30
+    try:
+        import streamlit as st
+        if "metodo_consumo" in st.session_state:
+            metodo = st.session_state["metodo_consumo"]
+    except Exception:
+        pass
+        
+    # Carrega fatores de segurança por setor configurados no banco
+    fatores_setor = {}
+    padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
+    try:
+        with get_conn() as conn:
+            rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
+            for k, v in rows_f:
+                setor_nome = k.replace("fator_seguranca_", "")
+                fatores_setor[setor_nome] = float(v)
+    except Exception:
+        pass
+
     buffer = io.BytesIO()
     
     # Prepara dados limpos para exportação
     df_export = df.copy()
-    df_export["Valor Total Ativo (R$)"] = df_export["saldo_atual"] * df_export["valor_unitario"]
+    if "criticidade" not in df_export.columns:
+        df_export["criticidade"] = "Y"
+        
+    df_export["valor_total"] = df_export["saldo_atual"] * df_export["valor_unitario"]
     
+    # Curva ABC
+    total_valuation = df_export["valor_total"].sum()
+    df_abc = df_export.sort_values(by="valor_total", ascending=False).copy()
+    classes_map = {}
+    if total_valuation > 0:
+        df_abc["valor_acumulado"] = df_abc["valor_total"].cumsum()
+        df_abc["perc_acumulado"] = (df_abc["valor_acumulado"] / total_valuation) * 100
+        for _, row in df_abc.iterrows():
+            perc = row["perc_acumulado"]
+            classes_map[row["id"]] = "A" if perc <= 80 else ("B" if perc <= 95 else "C")
+    else:
+        classes_map = {row["id"]: "C" for _, row in df_export.iterrows()}
+        
+    df_export["Classe_ABC"] = df_export["id"].map(classes_map).fillna("C")
+    
+    # Calcular Consumo Diário e histórico de 3 semanas via função oficial
+    df_export = processar_consumo_produtos(df_export, metodo, janela_dias)
+    
+    # Ponto de Pedido / Ressuprimento alinhado ao dashboard
+    def obter_fator_setor(row):
+        cat = row["categoria"]
+        return fatores_setor.get(cat, padroes.get(cat, 1.1))
+        
+    df_export["Fator_Seguranca"] = df_export.apply(obter_fator_setor, axis=1)
+    df_export["Estoque_Seguranca"] = np.maximum(df_export["estoque_minimo"], np.ceil(df_export["consumo_diario"] * df_export["lead_time"] * df_export["Fator_Seguranca"]).astype(int))
+    df_export["Consumo_Lead_Time"] = np.ceil(df_export["consumo_diario"] * df_export["lead_time"]).astype(int)
+    df_export["Ponto_Pedido"] = df_export["Consumo_Lead_Time"] + df_export["Estoque_Seguranca"]
+    
+    # Runway (Cobertura em dias)
+    df_export["Runway"] = 999
+    mask_consumo = df_export["consumo_diario"] > 0
+    df_export.loc[mask_consumo, "Runway"] = (df_export.loc[mask_consumo, "saldo_atual"] / df_export["consumo_diario"]).astype(int)
+    df_export["Runway_Txt"] = df_export["Runway"].apply(lambda x: "Sem consumo" if x == 999 else f"{x} dias")
+    
+    # Sugestão de Compra
+    df_export["Minimo_Ideal"] = df_export["Estoque_Seguranca"]
+    df_export["Sugestao_Compra"] = (df_export["Minimo_Ideal"] - df_export["saldo_atual"]).clip(lower=0)
+    df_export["Custo_Compra"] = df_export["Sugestao_Compra"] * df_export["valor_unitario"]
+    
+    # Status
+    def calc_status(row):
+        if row["saldo_atual"] <= 0:
+            return "🔴 Ruptura"
+        if row["saldo_atual"] < row["estoque_minimo"]:
+            return "🔴 Crítico"
+        if row["saldo_atual"] <= row["Ponto_Pedido"]:
+            return "🟠 Ponto de Pedido"
+        return "🟢 OK"
+    df_export["Status"] = df_export.apply(calc_status, axis=1)
+
     # Renomeia colunas para cabeçalhos amigáveis em português
     df_export = df_export.rename(columns={
         "id": "ID Produto",
         "nome": "Insumo / Item",
         "saldo_atual": "Saldo Atual",
-        "estoque_minimo": "Estoque Mínimo",
+        "estoque_minimo": "Estoque Mínimo (Membro)",
         "valor_unitario": "Valor Unitário (R$)",
         "categoria": "Setor / Categoria",
-        "lead_time": "Lead Time (Dias)"
+        "lead_time": "Lead Time (Dias)",
+        "consumo_diario": "Consumo Diário (Médio)",
+        "Runway_Txt": "Cobertura (Runway)",
+        "Classe_ABC": "Classe Financeira (ABC)",
+        "criticidade": "Criticidade Operacional (XYZ)",
+        "Ponto_Pedido": "Ponto de Ressuprimento",
+        "Minimo_Ideal": "Estoque de Segurança",
+        "Sugestao_Compra": "Sugestão de Reposição (Qtd)",
+        "Custo_Compra": "Custo de Reposição (R$)",
+        "valor_total": "Valor Total Ativo (R$)"
     })
     
-    # Ordena colunas
-    colunas_ordenadas = ["ID Produto", "Setor / Categoria", "Insumo / Item", "Saldo Atual", "Estoque Mínimo", "Valor Unitário (R$)", "Valor Total Ativo (R$)", "Lead Time (Dias)"]
+    # Ordena colunas para ficar muito organizado
+    colunas_ordenadas = [
+        "ID Produto", "Setor / Categoria", "Insumo / Item", "Status",
+        "Saldo Atual", "Estoque Mínimo (Membro)", "Estoque de Segurança", "Ponto de Ressuprimento", "Lead Time (Dias)",
+        "Consumo Diário (Médio)", "Cobertura (Runway)", "Classe Financeira (ABC)", "Criticidade Operacional (XYZ)",
+        "Valor Unitário (R$)", "Valor Total Ativo (R$)", "Sugestão de Reposição (Qtd)", "Custo de Reposição (R$)"
+    ]
     df_export = df_export[colunas_ordenadas]
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -88,10 +180,12 @@ def gerar_excel_estoque(df):
         
         # Formata colunas de valor
         for row in range(2, worksheet.max_row + 1):
-            cell_unit = worksheet.cell(row=row, column=6) # Valor Unitário
-            cell_total = worksheet.cell(row=row, column=7) # Valor Total
+            cell_unit = worksheet.cell(row=row, column=14) 
+            cell_total = worksheet.cell(row=row, column=15) 
+            cell_custo = worksheet.cell(row=row, column=17) 
             cell_unit.number_format = 'R$ #,##0.00'
             cell_total.number_format = 'R$ #,##0.00'
+            cell_custo.number_format = 'R$ #,##0.00'
             
         # Adiciona linha de totais na base
         max_row = worksheet.max_row
@@ -105,22 +199,27 @@ def gerar_excel_estoque(df):
             bottom=Side(style='double', color='000000')
         )
         
-        worksheet.cell(row=totals_row, column=3, value="PATRIMÔNIO TOTAL:").font = font_total
+        worksheet.cell(row=totals_row, column=3, value="TOTAIS DO WMS:").font = font_total
         worksheet.cell(row=totals_row, column=3).alignment = Alignment(horizontal="right")
         
         # Fórmulas de totalização do Excel
-        cell_sum_saldo = worksheet.cell(row=totals_row, column=4, value=f"=SUM(D2:D{max_row})")
-        cell_sum_total = worksheet.cell(row=totals_row, column=7, value=f"=SUM(G2:G{max_row})")
+        cell_sum_saldo = worksheet.cell(row=totals_row, column=5, value=f"=SUM(E2:E{max_row})")
+        cell_sum_val = worksheet.cell(row=totals_row, column=15, value=f"=SUM(O2:O{max_row})")
+        cell_sum_sug = worksheet.cell(row=totals_row, column=16, value=f"=SUM(P2:P{max_row})")
+        cell_sum_custo = worksheet.cell(row=totals_row, column=17, value=f"=SUM(Q2:Q{max_row})")
         
-        for c_idx in range(1, 9):
+        for c_idx in range(1, 18):
             c_cell = worksheet.cell(row=totals_row, column=c_idx)
             c_cell.font = font_total
             c_cell.fill = fill_total
             c_cell.border = border_total
             
         cell_sum_saldo.alignment = Alignment(horizontal="center")
-        cell_sum_total.number_format = 'R$ #,##0.00'
-        cell_sum_total.alignment = Alignment(horizontal="center")
+        cell_sum_val.number_format = 'R$ #,##0.00'
+        cell_sum_val.alignment = Alignment(horizontal="center")
+        cell_sum_sug.alignment = Alignment(horizontal="center")
+        cell_sum_custo.number_format = 'R$ #,##0.00'
+        cell_sum_custo.alignment = Alignment(horizontal="center")
         
         formatar_aba_excel(worksheet, title_color="1E3A8A")
         
@@ -173,37 +272,43 @@ def gerar_excel_auditoria(logs):
     buffer.seek(0)
     return buffer.getvalue()
 
-def gerar_html_pdf_estoque(df, mv, logs):
+def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
     """
     Compila um relatório executivo de alta fidelidade visual (HTML) otimizado para salvamento em PDF / Impressão.
     """
     import numpy as np
     import datetime
     from datetime import datetime as dt_class
+    from utils.consumption import processar_consumo_produtos
     
-    # 1. Preparar dados de consumo dos últimos 30 dias
-    consumo_30d = {}
-    if not mv.empty:
-        mv_df = mv.copy()
-        mv_df['dt'] = pd.to_datetime(mv_df['data_hora'], format='%d/%m/%Y %H:%M', errors='coerce')
-        agora = dt_class.now()
-        limite = agora - pd.Timedelta(days=30)
-        mv_filtradas = mv_df[mv_df['dt'] >= limite]
-        
-        if not mv_filtradas.empty:
-            saidas = mv_filtradas[
-                (mv_filtradas['tipo'] == 'Saída') | 
-                ((mv_filtradas['tipo'] == 'Contagem') & (mv_filtradas['quantidade'] < 0))
-            ]
-            if not saidas.empty:
-                cons = saidas.groupby('produto')['quantidade'].apply(lambda x: x.abs().sum()).reset_index()
-                consumo_30d = dict(zip(cons['produto'], cons['quantidade']))
+    # 1. Carregar método da sessão se não fornecido
+    if metodo is None:
+        try:
+            import streamlit as st
+            metodo = st.session_state.get("metodo_consumo", "movimentacoes")
+        except Exception:
+            metodo = "movimentacoes"
+            
+    # Carregar fatores de segurança por setor configurados no banco
+    fatores_setor = {}
+    padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
+    try:
+        with get_conn() as conn:
+            rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
+            for k, v in rows_f:
+                setor_nome = k.replace("fator_seguranca_", "")
+                fatores_setor[setor_nome] = float(v)
+    except Exception:
+        pass
 
     # 2. Calcular Valuation, Cobertura, Classe ABC, Ponto de Pedido e Sugestões
     df_calc = df.copy()
+    if "criticidade" not in df_calc.columns:
+        df_calc["criticidade"] = "Y"
+        
     df_calc["valor_total"] = df_calc["saldo_atual"] * df_calc["valor_unitario"]
     
-    # Curva ABC
+    # Curva ABC (Classe A, B, C)
     total_valuation = df_calc["valor_total"].sum()
     df_abc = df_calc.sort_values(by="valor_total", ascending=False).copy()
     classes_map = {}
@@ -218,22 +323,26 @@ def gerar_html_pdf_estoque(df, mv, logs):
         
     df_calc["Classe_ABC"] = df_calc["id"].map(classes_map).fillna("C")
     
-    # Fatores e cálculos logísticos
-    df_calc["consumo_diario"] = df_calc["nome"].map(consumo_30d).fillna(0) / 30.0
+    # Processar consumo via função oficial do sistema (alinhada ao painel)
+    df_calc = processar_consumo_produtos(df_calc, metodo, janela_dias)
+    
+    # Ponto de Pedido / Ressuprimento alinhado ao dashboard
+    def obter_fator_setor(row):
+        cat = row["categoria"]
+        return fatores_setor.get(cat, padroes.get(cat, 1.1))
+        
+    df_calc["Fator_Seguranca"] = df_calc.apply(obter_fator_setor, axis=1)
+    df_calc["Estoque_Seguranca"] = np.maximum(df_calc["estoque_minimo"], np.ceil(df_calc["consumo_diario"] * df_calc["lead_time"] * df_calc["Fator_Seguranca"]).astype(int))
+    df_calc["Consumo_Lead_Time"] = np.ceil(df_calc["consumo_diario"] * df_calc["lead_time"]).astype(int)
+    df_calc["Ponto_Pedido"] = df_calc["Consumo_Lead_Time"] + df_calc["Estoque_Seguranca"]
     
     # Runway (Cobertura em dias)
     df_calc["Runway"] = 999
     mask_consumo = df_calc["consumo_diario"] > 0
-    df_calc.loc[mask_consumo, "Runway"] = (df_calc.loc[mask_consumo, "saldo_atual"] / df_calc.loc[mask_consumo, "consumo_diario"]).astype(int)
+    df_calc.loc[mask_consumo, "Runway"] = (df_calc.loc[mask_consumo, "saldo_atual"] / df_calc["consumo_diario"]).astype(int)
     
-    # Ponto de Pedido / Ressuprimento (cons_diario * lead_time)
-    df_calc["Ponto_Pedido"] = np.ceil(df_calc["consumo_diario"] * df_calc["lead_time"]).astype(int)
-    
-    # Estoque Mínimo Ideal e Sugestão de Compra
-    fator_map = {"A": 1.4, "B": 1.2, "C": 1.1}
-    df_calc["Fator"] = df_calc["Classe_ABC"].map(fator_map).fillna(1.1)
-    df_calc["Minimo_Ideal"] = np.ceil(df_calc["consumo_diario"] * df_calc["lead_time"] * df_calc["Fator"]).astype(int)
-    df_calc["Minimo_Ideal"] = np.maximum(df_calc["estoque_minimo"], df_calc["Minimo_Ideal"])
+    # Minimo Ideal e Sugestão de Compra
+    df_calc["Minimo_Ideal"] = df_calc["Estoque_Seguranca"]
     df_calc["Sugestao_Compra"] = (df_calc["Minimo_Ideal"] - df_calc["saldo_atual"]).clip(lower=0)
     df_calc["Custo_Compra"] = df_calc["Sugestao_Compra"] * df_calc["valor_unitario"]
     
@@ -243,8 +352,8 @@ def gerar_html_pdf_estoque(df, mv, logs):
             return "Ruptura"
         if row["saldo_atual"] < row["estoque_minimo"]:
             return "Crítico"
-        if row["Runway"] != 999 and row["Runway"] <= row["lead_time"]:
-            return "Risco"
+        if row["saldo_atual"] <= row["Ponto_Pedido"]:
+            return "Ponto de Pedido"
         return "OK"
         
     df_calc["Status"] = df_calc.apply(calc_status, axis=1)
@@ -286,7 +395,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
         
         if status in ["Ruptura", "Crítico"] and row["Sugestao_Compra"] > 0:
             urgente_comprar.append(f"<b>{nome}</b> (Saldo: {saldo} un, Compra Recomendada: {int(row['Sugestao_Compra'])} un)")
-        elif status == "Risco" or saldo == 1:
+        elif status == "Ponto de Pedido" or saldo == 1:
             monitorar_aprovisionar.append(f"<b>{nome}</b> (Saldo: {saldo} un, Cobertura: {runway if runway != 999 else 'N/A'} dias)")
         
         # Investigar excesso
@@ -297,7 +406,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
             investigar.append(f"<b>{nome}</b>: Verificar preço unitário cadastrado (R$ {pmp:,.2f}/un).")
 
     # 5. Ordenação por Criticidade na Posição de Estoque
-    status_order = {"Ruptura": 0, "Crítico": 1, "Risco": 2, "OK": 3}
+    status_order = {"Ruptura": 0, "Crítico": 1, "Ponto de Pedido": 2, "OK": 3}
     df_calc["status_priority"] = df_calc["Status"].map(status_order)
     df_estoque_ordenado = df_calc.sort_values(by=["status_priority", "categoria", "nome"]).copy()
 
@@ -345,7 +454,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
             val_total = row["valor_total"]
             runway = row["Runway"]
             runway_txt = "Sem consumo" if runway == 999 else f"{runway} dias"
-            abc = f"Classe {row['Classe_ABC']}"
+            abc_xyz = f"Classe {row['Classe_ABC']}-{row['criticidade']}"
             ponto_ped = row["Ponto_Pedido"]
             status = row["Status"]
             
@@ -353,8 +462,8 @@ def gerar_html_pdf_estoque(df, mv, logs):
                 badge = '<span class="badge badge-danger">RUPTURA</span>'
             elif status == "Crítico":
                 badge = '<span class="badge badge-warning" style="background-color:#FDE8E8; color:#9B1C1C;">CRÍTICO</span>'
-            elif status == "Risco":
-                badge = '<span class="badge badge-warning">RISCO</span>'
+            elif status == "Ponto de Pedido":
+                badge = '<span class="badge badge-warning">PONTO DE PEDIDO</span>'
             else:
                 badge = '<span class="badge badge-success">OK</span>'
                 
@@ -367,7 +476,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
                 <td style="text-align:center;">{runway_txt}</td>
                 <td style="text-align:center;">R$ {preco:,.2f}</td>
                 <td style="text-align:center;">R$ {val_total:,.2f}</td>
-                <td style="text-align:center;"><b>{abc}</b></td>
+                <td style="text-align:center;"><b>{abc_xyz}</b></td>
                 <td style="text-align:center;">{badge}</td>
             </tr>
             """
@@ -388,7 +497,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
                         <th style="text-align:center;">Cobertura</th>
                         <th style="text-align:center;">Preço Un.</th>
                         <th style="text-align:center;">Valor Total</th>
-                        <th style="text-align:center;">Classe ABC</th>
+                        <th style="text-align:center;">Classe ABC-XYZ</th>
                         <th style="text-align:center;">Status</th>
                     </tr>
                 </thead>
@@ -412,7 +521,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
             sug = row["Sugestao_Compra"]
             preco = row["valor_unitario"]
             custo = row["Custo_Compra"]
-            classe = f"Classe {row['Classe_ABC']}"
+            classe = f"Classe {row['Classe_ABC']}-{row['criticidade']}"
             
             linhas_compras += f"""
             <tr>
@@ -438,7 +547,7 @@ def gerar_html_pdf_estoque(df, mv, logs):
                         <th style="text-align:center; color:#E02424;">Qtd. Recomendada</th>
                         <th style="text-align:center;">Preço Unit.</th>
                         <th style="text-align:center;">Total Estimado</th>
-                        <th style="text-align:center;">Classe ABC</th>
+                        <th style="text-align:center;">Classe ABC-XYZ</th>
                     </tr>
                 </thead>
                 <tbody>
