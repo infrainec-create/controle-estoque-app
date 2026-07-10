@@ -338,7 +338,7 @@ else:
             }, 1000);
         </script>
         """
-        components.html(timer_html, height=105)
+        components.html(timer_html, height=105, key=f"session_timer_{int(st.session_state['ultimo_acesso'])}")
             
         # Leitura reativa do status de sincronia assíncrona gravado no SQLite
         if st.session_state.get("db_sincronizado") == "local":
