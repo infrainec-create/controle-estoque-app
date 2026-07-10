@@ -282,6 +282,56 @@ else:
             st.session_state["perfil_atual"] = ""
             st.rerun()
             
+        # Cronômetro de Sessão regressivo em tempo real
+        import streamlit.components.v1 as components
+        timer_html = """
+        <div style="
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            padding: 10px 14px;
+            background-color: rgba(255, 75, 75, 0.08);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 75, 75, 0.2);
+            text-align: center;
+            margin-top: 5px;
+            margin-bottom: 10px;
+        ">
+            <span style="font-size: 0.72rem; color: #888; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; display: block; margin-bottom: 2px;">
+                ⏳ Tempo de Sessão Ativa
+            </span>
+            <div id="countdown" style="font-size: 1.55rem; font-weight: 700; color: #FF4B4B; font-variant-numeric: tabular-nums;">
+                30:00
+            </div>
+            <span style="font-size: 0.65rem; color: #777; display: block; margin-top: 2px;">
+                Reseta automaticamente ao interagir
+            </span>
+        </div>
+        <script>
+            var duration = 1800; // 30 minutos em segundos
+            var timer = duration;
+            var display = document.getElementById('countdown');
+            
+            var countdownInterval = setInterval(function () {
+                var minutes = parseInt(timer / 60, 10);
+                var seconds = parseInt(timer % 60, 10);
+
+                minutes = minutes < 10 ? "0" + minutes : minutes;
+                seconds = seconds < 10 ? "0" + seconds : seconds;
+
+                display.textContent = minutes + ":" + seconds;
+
+                if (--timer < 0) {
+                    clearInterval(countdownInterval);
+                    try {
+                        window.parent.location.reload();
+                    } catch (e) {
+                        window.location.reload();
+                    }
+                }
+            }, 1000);
+        </script>
+        """
+        components.html(timer_html, height=105)
+            
         # Leitura reativa do status de sincronia assíncrona gravado no SQLite
         if st.session_state.get("db_sincronizado") == "local":
             st.caption("🟡 Sincronização Desativada (Modo Offline)")
