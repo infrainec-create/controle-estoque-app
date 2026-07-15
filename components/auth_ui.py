@@ -177,3 +177,41 @@ def render_auth_ui():
                             st.warning("Preencha a resposta secreta e a nova senha para continuar.")
                 else:
                     st.error("Usuário não encontrado na base do sistema.")
+
+    # Seção temporária de diagnóstico do banco de dados (remover após a resolução)
+    st.write("")
+    with st.expander("🔍 Diagnóstico do Banco de Dados (Suporte Técnico)"):
+        try:
+            import os
+            from database.connection import DB_PATH
+            st.write(f"**Caminho do Banco:** `{DB_PATH}`")
+            if os.path.exists(DB_PATH):
+                st.write(f"**Tamanho do Banco:** `{os.path.getsize(DB_PATH)} bytes`")
+                st.write(f"**Última Modificação Local:** `{datetime.fromtimestamp(os.path.getmtime(DB_PATH)).strftime('%Y-%m-%d %H:%M:%S')}`")
+            else:
+                st.write("⚠️ Arquivo do banco de dados não encontrado localmente!")
+            
+            with get_conn() as conn:
+                # Verificar tabelas
+                tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                st.write(f"**Tabelas encontradas:** `{[t[0] for t in tables]}`")
+                
+                # Verificar usuários cadastrados
+                if any(t[0] == 'usuarios' for t in tables):
+                    usrs = conn.execute("SELECT usuario, aprovado, perfil FROM usuarios").fetchall()
+                    st.write(f"**Usuários na base:** `{usrs}`")
+                else:
+                    st.write("⚠️ Tabela de usuários não existe!")
+                    
+                # Verificar status do sincronismo
+                if any(t[0] == 'status_sincronismo' for t in tables):
+                    sync_status = conn.execute("SELECT * FROM status_sincronismo").fetchall()
+                    st.write(f"**Status de Sincronização:** `{sync_status}`")
+                    
+                # Verificar configurações
+                if any(t[0] == 'configuracoes' for t in tables):
+                    configs = conn.execute("SELECT * FROM configuracoes").fetchall()
+                    st.write(f"**Configurações do Banco:** `{configs}`")
+        except Exception as diag_err:
+            st.error(f"Erro ao rodar diagnóstico: {diag_err}")
+
