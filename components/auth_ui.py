@@ -212,6 +212,28 @@ def render_auth_ui():
                 if any(t[0] == 'configuracoes' for t in tables):
                     configs = conn.execute("SELECT * FROM configuracoes").fetchall()
                     st.write(f"**Configurações do Banco:** `{configs}`")
+            
+            # --- DIAGNÓSTICO DO GOOGLE DRIVE ---
+            st.write("---")
+            st.write("🔄 **Testando Conexão com Google Drive...**")
+            try:
+                from utils.drive_sync import obter_servico_drive, FOLDER_ID
+                servico = obter_servico_drive()
+                st.write("✅ **Serviço do Google Drive:** Inicializado com sucesso.")
+                
+                query = f"'{FOLDER_ID}' in parents and trashed=false"
+                res = servico.files().list(
+                    q=query, 
+                    fields="files(id, name, modifiedTime, size)",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True
+                ).execute()
+                files = res.get('files', [])
+                st.write(f"📂 **Arquivos encontrados na pasta do Drive:** `{[f.get('name') for f in files]}`")
+                for f in files:
+                    st.write(f"- `{f.get('name')}` (ID: `{f.get('id')}`, Modificado: `{f.get('modifiedTime')}`, Tamanho: `{f.get('size')} bytes`)")
+            except Exception as drive_err:
+                st.error(f"❌ **Erro de conexão com o Google Drive:** {drive_err}")
         except Exception as diag_err:
             st.error(f"Erro ao rodar diagnóstico: {diag_err}")
 
