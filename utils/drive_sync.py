@@ -123,11 +123,24 @@ def sincronizar_banco_na_inicializacao():
     Sincroniza o banco local com o banco do Drive no início da sessão.
     Se o banco do Drive for mais recente, realiza o download.
     """
-    # 1. Se o banco não existir ou estiver vazio localmente, baixa imediatamente do Drive!
-    # Fazemos isso antes de qualquer get_conn() para impedir que o SQLite crie um arquivo em branco vazio.
-    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+    # 1. Se o banco não existir, estiver vazio, ou não tiver nenhum usuário cadastrado (banco local recém-criado sem sincronismo),
+    # força a tentativa de download do Drive para recuperar as contas reais.
+    has_users = False
+    if os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0:
+        try:
+            with get_conn() as conn:
+                res = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()
+                if res and res[0] > 0:
+                    has_users = True
+        except Exception:
+            pass
+
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0 or not has_users:
         sucesso = descarregar_do_drive()
         if not sucesso:
+            if os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0:
+                # Se falhou ao baixar mas já temos um arquivo local com a estrutura inicial (ex: offline), continuamos
+                return
             raise Exception("Não foi possível baixar o banco de dados inicial do Google Drive e não há banco local disponível.")
         return
 

@@ -232,6 +232,19 @@ def render_auth_ui():
                 st.write(f"📂 **Arquivos encontrados na pasta do Drive:** `{[f.get('name') for f in files]}`")
                 for f in files:
                     st.write(f"- `{f.get('name')}` (ID: `{f.get('id')}`, Modificado: `{f.get('modifiedTime')}`, Tamanho: `{f.get('size')} bytes`)")
+                
+                # Botão para forçar restauração manual do banco de dados do Google Drive
+                st.write("")
+                if st.button("📥 Forçar Restauração do Banco do Google Drive", use_container_width=True):
+                    with st.spinner("Baixando banco de dados do Google Drive..."):
+                        from utils.drive_sync import descarregar_do_drive
+                        if descarregar_do_drive():
+                            st.success("✅ Banco de dados restaurado com sucesso! Recarregando...")
+                            import time
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Falha ao baixar o banco de dados do Google Drive. Verifique a conexão e as permissões.")
             except Exception as drive_err:
                 st.error(f"❌ **Erro de conexão com o Google Drive:** {drive_err}")
         except Exception as diag_err:
