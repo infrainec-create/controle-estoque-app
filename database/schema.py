@@ -5,9 +5,12 @@ from database.connection import get_conn
 
 def init_db():
     with get_conn() as conn:
-        # ATIVAÇÃO DO MODO WAL (Write-Ahead Logging) para concorrência segura
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
+        # Configuração do modo de jornal compatível com contêineres e nuvens (ex: Streamlit Cloud)
+        try:
+            conn.execute("PRAGMA journal_mode=DELETE;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
         
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sessoes (

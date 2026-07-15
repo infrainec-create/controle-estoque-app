@@ -27,8 +27,12 @@ def render_auth_ui():
                     st.error("Você excedeu o número máximo de tentativas de login. Tente novamente mais tarde.")
                 elif usr_input and pass_input:
                     usr_input_norm = normalizar_usuario(usr_input)
-                    with get_conn() as conn:
-                        res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
+                    try:
+                        with get_conn() as conn:
+                            res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
+                    except Exception as db_err:
+                        st.error(f"❌ Erro ao acessar banco de dados: {db_err}")
+                        res = None
                     
                     from utils.security import verificar_e_atualizar_senha
                     if res and verificar_e_atualizar_senha(res[3], pass_input, res[2]):
@@ -37,9 +41,17 @@ def render_auth_ui():
                         if aprovado == 1:
                             session_token = str(uuid.uuid4())
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            with get_conn() as conn:
-                                conn.execute("INSERT OR REPLACE INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (session_token, db_usr, now_str))
-                            st.query_params["session"] = session_token
+                            session_saved = False
+                            try:
+                                with get_conn() as conn:
+                                    conn.execute("INSERT OR REPLACE INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (session_token, db_usr, now_str))
+                                session_saved = True
+                            except Exception as db_err:
+                                st.warning("⚠️ Não foi possível salvar a sessão persistente no banco de dados. O login continuará em modo temporário.")
+                                print(f"Erro ao salvar sessao persistente: {db_err}")
+                            
+                            if session_saved:
+                                st.query_params["session"] = session_token
 
                             st.session_state["autenticado"] = True
                             st.session_state["usuario_atual"] = db_usr
@@ -124,8 +136,12 @@ def render_auth_ui():
              
             if usr_recup:
                 usr_recup_norm = normalizar_usuario(usr_recup)
-                with get_conn() as conn:
-                    dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
+                try:
+                    with get_conn() as conn:
+                        dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
+                except Exception as db_err:
+                    st.error(f"❌ Erro ao consultar banco de dados: {db_err}")
+                    dados_usr = None
                  
                 if dados_usr:
                     db_usr = dados_usr[3]
@@ -142,14 +158,17 @@ def render_auth_ui():
                                 from utils.security import verificar_senha
                                 hash_salvo_resp = dados_usr[2]
                                 if verificar_senha(resp_recup, hash_salvo_resp):
-                                    with get_conn() as conn:
-                                        conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
-                                     
-                                    st.session_state["recovery_attempts"] = 0
-                                    registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
-                                     
-                                    disparar_sincronizacao()
-                                    st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+                                    try:
+                                        with get_conn() as conn:
+                                            conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
+                                         
+                                        st.session_state["recovery_attempts"] = 0
+                                        registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
+                                         
+                                        disparar_sincronizacao()
+                                        st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+                                    except Exception as db_err:
+                                        st.error(f"❌ Erro ao atualizar senha no banco: {db_err}")
                                 else:
                                     st.session_state["recovery_attempts"] += 1
                                     tentativas_restantes = max_attempts - st.session_state["recovery_attempts"]
