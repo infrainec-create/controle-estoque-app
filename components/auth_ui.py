@@ -15,7 +15,10 @@ def render_auth_ui():
         
         <style>
         /* Tipografia Global do Painel de Login */
-        .stApp, div[data-testid="stForm"], div[data-baseweb="tab-list"], input, button, select, span, p, h1, h2, h3 {
+        .stApp, div[data-testid="stForm"], div[data-baseweb="tab-list"] {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        input, select, p, h1, h2, h3 {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
         }
 

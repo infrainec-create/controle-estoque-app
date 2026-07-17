@@ -34,9 +34,11 @@ st.markdown("""
     /* ─────────────────────────────────────────────────────────────
        GLOBAL STYLING OVERRIDES (FONTS & UTILITIES)
        ───────────────────────────────────────────────────────────── */
-    /* Target only text containers and elements to prevent breaking SVG/font icon layouts */
-    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"], 
-    .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, span, input, button, select, textarea {
+    /* Cascades font-family to layout containers while preserving SVG and font-based icon families */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"], .stApp {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, input, select, textarea {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
     
