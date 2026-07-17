@@ -9,9 +9,11 @@ from database.schema import init_db
 from database.queries import listar_produtos, listar_movimentacoes, registrar_log_auditoria
 from utils.security import inicializar_estados_sessao
 from utils.drive_sync import descarregar_do_drive, FOLDER_ID, sincronizar_banco_na_inicializacao
+from utils.session import gerenciar_timeout_sessao, recuperar_sessao_persistente
 
 # Importações de Componentes Visuais de UI
 from components.auth_ui import render_auth_ui
+from components.sidebar_ui import render_sidebar_ui
 from components.dashboard_ui import render_dashboard_ui
 from components.operations_ui import render_operations_ui
 from components.audit_ui import render_audit_ui
@@ -304,65 +306,9 @@ if "login_attempts" not in st.session_state:
 if "recovery_attempts" not in st.session_state:
     st.session_state["recovery_attempts"] = 0
 
-# --- CONTROLE DE EXPIRAÇÃO DE SESSÃO POR INATIVIDADE (30 MINUTOS) ---
-import time
-INACTIVITY_TIMEOUT = 1800  # 30 minutos em segundos
-
-if st.session_state.get("autenticado"):
-    agora_ts = time.time()
-    ultimo_acesso = st.session_state.get("ultimo_acesso")
-    
-    if ultimo_acesso:
-        decorrido = agora_ts - ultimo_acesso
-        if decorrido > INACTIVITY_TIMEOUT:
-            # Registrar auditoria do logoff automático
-            registrar_log_auditoria(st.session_state["usuario_atual"], "Sessão Expirada", "Sessão encerrada por inatividade de 30 minutos.")
-            
-            # Deletar sessão persistente se existir na URL
-            session_token = st.query_params.get("session")
-            if session_token:
-                with get_conn() as conn:
-                    conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
-                st.query_params.clear()
-                
-            st.session_state["autenticado"] = False
-            st.session_state["usuario_atual"] = ""
-            st.session_state["perfil_atual"] = ""
-            if "ultimo_acesso" in st.session_state:
-                del st.session_state["ultimo_acesso"]
-            st.warning("⏱️ Sua sessão expirou devido a 30 minutos de inatividade. Faça login novamente.")
-            st.rerun()
-    
-    # Atualiza o timestamp de atividade para a ação atual
-    st.session_state["ultimo_acesso"] = agora_ts
-
-# Recuperação de sessão persistente via Token na URL (Tempo reduzido para 2 horas para maior segurança)
-if not st.session_state["autenticado"]:
-    session_token = st.query_params.get("session")
-    if session_token:
-        try:
-            from datetime import datetime, timedelta
-            with get_conn() as conn:
-                sessao = conn.execute("SELECT usuario, data_criacao FROM sessoes WHERE token = ?", (session_token,)).fetchone()
-            if sessao:
-                usr, dt_criacao_str = sessao
-                dt_criacao = datetime.strptime(dt_criacao_str, "%Y-%m-%d %H:%M:%S")
-                # Sessão expira em 2 horas
-                if datetime.now() - dt_criacao < timedelta(hours=2):
-                    with get_conn() as conn:
-                        res_usr = conn.execute("SELECT aprovado, perfil FROM usuarios WHERE usuario = ?", (usr,)).fetchone()
-                    if res_usr and res_usr[0] == 1:
-                        st.session_state["autenticado"] = True
-                        st.session_state["usuario_atual"] = usr
-                        st.session_state["perfil_atual"] = res_usr[1]
-                        st.session_state["ultimo_acesso"] = time.time()
-                        st.rerun()
-                else:
-                    with get_conn() as conn:
-                        conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
-                    st.query_params.clear()
-        except Exception:
-            pass
+# --- CONTROLE DE EXPIRAÇÃO E RECUPERAÇÃO DE SESSÃO (MODULARIZADOS) ---
+gerenciar_timeout_sessao()
+recuperar_sessao_persistente()
 
 # ─────────────────────────────────────────────────────────────
 # FLUXO DE ROTEAMENTO VISUAL (AUTENTICAÇÃO & COMPONENTES)
@@ -381,95 +327,16 @@ else:
     if st.session_state.get("db_sincronizado") == "local":
         st.warning("🔌 **Modo Offline Ativo:** A sincronização com o Google Drive está desativada. As alterações serão salvas localmente apenas.")
     else:
-        with get_conn() as conn:
-            status_row_main = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
-        if status_row_main and status_row_main[0] == 0:
-            st.error(f"⚠️ **Alerta de Sincronização:** {status_row_main[1]} (Registrado em: {status_row_main[2]})")
-
-    # Sidebar de Informações Operacionais e Logoff
-    with st.sidebar:
-        st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
-        st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
-        if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
-            # Registrar log de auditoria antes de limpar a sessão
-            registrar_log_auditoria(st.session_state["usuario_atual"], "Logoff no Sistema", "Operador encerrou a sessão manualmente.")
-            # Deletar sessão persistente se existir
-            session_token = st.query_params.get("session")
-            if session_token:
-                with get_conn() as conn:
-                    conn.execute("DELETE FROM sessoes WHERE token = ?", (session_token,))
-                st.query_params.clear()
-            st.session_state["autenticado"] = False
-            st.session_state["usuario_atual"] = ""
-            st.session_state["perfil_atual"] = ""
-            st.rerun()
-            
-        # Cronômetro de Sessão regressivo em tempo real
-        import streamlit.components.v1 as components
-        timer_html = f"<!-- timestamp: {int(st.session_state['ultimo_acesso'])} -->\n" + """
-        <div style="
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            padding: 10px 14px;
-            background-color: rgba(255, 75, 75, 0.08);
-            border-radius: 10px;
-            border: 1px solid rgba(255, 75, 75, 0.2);
-            text-align: center;
-            margin-top: 5px;
-            margin-bottom: 10px;
-        ">
-            <span style="font-size: 0.72rem; color: #888; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; display: block; margin-bottom: 2px;">
-                ⏳ Tempo de Sessão Ativa
-            </span>
-            <div id="countdown" style="font-size: 1.55rem; font-weight: 700; color: #FF4B4B; font-variant-numeric: tabular-nums;">
-                30:00
-            </div>
-            <span style="font-size: 0.65rem; color: #777; display: block; margin-top: 2px;">
-                Reseta automaticamente ao interagir
-            </span>
-        </div>
-        <script>
-            var duration = 1800; // 30 minutos em segundos
-            var timer = duration;
-            var display = document.getElementById('countdown');
-            
-            var countdownInterval = setInterval(function () {
-                var minutes = parseInt(timer / 60, 10);
-                var seconds = parseInt(timer % 60, 10);
-
-                minutes = minutes < 10 ? "0" + minutes : minutes;
-                seconds = seconds < 10 ? "0" + seconds : seconds;
-
-                display.textContent = minutes + ":" + seconds;
-
-                if (--timer < 0) {
-                    clearInterval(countdownInterval);
-                    try {
-                        window.parent.location.reload();
-                    } catch (e) {
-                        window.location.reload();
-                    }
-                }
-            }, 1000);
-        </script>
-        """
-        components.html(timer_html, height=105)
-            
-        # Leitura reativa do status de sincronia assíncrona gravado no SQLite
-        if st.session_state.get("db_sincronizado") == "local":
-            st.caption("🟡 Sincronização Desativada (Modo Offline)")
-        else:
+        try:
             with get_conn() as conn:
-                status_row = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
-            
-            if status_row:
-                sucesso, mensagem, timestamp_str = status_row
-                if sucesso == 1:
-                    if "segundo plano" in mensagem:
-                        st.caption(f"⏳ {mensagem}")
-                    else:
-                        st.caption(f"🟢 {mensagem} ({timestamp_str})")
-                else:
-                    st.error(f"⚠️ {mensagem} ({timestamp_str})")
+                status_row_main = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+            if status_row_main and status_row_main[0] == 0:
+                st.error(f"⚠️ **Alerta de Sincronização:** {status_row_main[1]} (Registrado em: {status_row_main[2]})")
+        except Exception:
+            pass
+
+    # Renderiza a barra lateral modularizada (Sidebar, Logoff, Timer e Status)
+    render_sidebar_ui()
 
     # Carrega DataFrames a partir das queries cacheadas
     df = listar_produtos()
