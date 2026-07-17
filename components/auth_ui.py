@@ -182,6 +182,16 @@ def render_auth_ui():
                 ">Controle de Estoque e Auditoria Avançada</p>
             </div>
         """, unsafe_allow_html=True)
+
+        # Exibe alertas de erros de sincronização na tela de login se houverem
+        try:
+            with get_conn() as conn:
+                status_row = conn.execute("SELECT sucesso, mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+            if status_row and status_row[0] == 0:
+                st.warning(f"⚠️ **Aviso de Sincronização:** {status_row[1]} ({status_row[2]})")
+        except Exception:
+            pass
+
         max_attempts = 5
 
         aba_login, aba_cadastro, aba_recuperar = st.tabs(["🔑 Entrar no Sistema", "👤 Criar Conta", "🛠️ Esqueci a Senha"])

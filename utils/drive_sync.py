@@ -138,10 +138,10 @@ def sincronizar_banco_na_inicializacao():
     if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0 or not has_users:
         sucesso = descarregar_do_drive()
         if not sucesso:
-            if os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0:
-                # Se falhou ao baixar mas já temos um arquivo local com a estrutura inicial (ex: offline), continuamos
+            if os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0 and has_users:
+                # Se falhou ao baixar mas já temos um banco local com usuários válidos, continuamos offline
                 return
-            raise Exception("Não foi possível baixar o banco de dados inicial do Google Drive e não há banco local disponível.")
+            raise Exception("Não foi possível baixar o banco de dados do Google Drive e não há usuários cadastrados localmente.")
         return
 
     # Se já existe e tem tamanho, agora sim podemos ler configurações de sincronização
