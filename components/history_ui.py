@@ -1,6 +1,5 @@
 import pandas as pd
 import streamlit as st
-import datetime
 
 def render_history_ui(df, mv):
     st.subheader("📜 Histórico de Movimentações")

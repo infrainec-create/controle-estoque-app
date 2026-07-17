@@ -1,8 +1,6 @@
 import os
-import shutil
 import glob
 from datetime import datetime
-from database.connection import DB_PATH
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKUP_DIR = os.path.join(BASE_DIR, "backups")

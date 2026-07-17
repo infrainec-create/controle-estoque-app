@@ -44,7 +44,7 @@ def render_audit_ui(df):
             
             realizar_backup_local()
             disparar_sincronizacao()
-            st.toast(f"📋 Inventário gravado!", icon="💾")
+            st.toast("📋 Inventário gravado!", icon="💾")
             st.rerun()
 
     if ids_contados_hoje:

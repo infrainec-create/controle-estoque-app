@@ -2,7 +2,6 @@ import io
 import pandas as pd
 import numpy as np
 import datetime
-from datetime import datetime as dt_class
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from database.connection import get_conn
@@ -60,7 +59,6 @@ def gerar_excel_estoque(df):
     """
     Gera arquivo Excel (.xlsx) premium contendo a posição de estoque, valuation de ativos e métricas de suprimentos.
     """
-    import numpy as np
     from utils.consumption import processar_consumo_produtos
     
     # 1. Carrega método da sessão ou usa padrão
@@ -176,7 +174,6 @@ def gerar_excel_estoque(df):
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_export.to_excel(writer, sheet_name='Valuation de Estoque', index=False)
         
-        workbook = writer.book
         worksheet = writer.sheets['Valuation de Estoque']
         
         # Formata colunas de valor
@@ -277,9 +274,6 @@ def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
     """
     Compila um relatório executivo de alta fidelidade visual (HTML) otimizado para salvamento em PDF / Impressão.
     """
-    import numpy as np
-    import datetime
-    from datetime import datetime as dt_class
     from utils.consumption import processar_consumo_produtos
     
     # 1. Carregar método da sessão se não fornecido

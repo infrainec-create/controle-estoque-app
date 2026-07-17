@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from database.connection import get_conn

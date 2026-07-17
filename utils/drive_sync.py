@@ -326,7 +326,7 @@ def _executar_sincronizacao_drive_interna():
                                 )
                         else:
                             raise e_create
-            except Exception as e_backup:
+            except Exception:
                 # Falhas na rotina de backup secundária não devem travar a sincronização principal
                 pass
         

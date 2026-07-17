@@ -1,5 +1,4 @@
 import streamlit as st
-from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria, registrar_entrada_produto, registrar_saida_produto
 from utils.backup import realizar_backup_local
@@ -18,7 +17,7 @@ def render_operations_ui(df):
             sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
             id_pe = ops[sel_e]
             p_atual = df.loc[df["id"]==id_pe].iloc[0]
-            sal_e = int(p_atual["saldo_atual"])
+            int(p_atual["saldo_atual"])
             pmp_antigo = float(p_atual["valor_unitario"])
             
             c1, c2 = st.columns([1, 1])
@@ -61,7 +60,7 @@ def render_operations_ui(df):
             if bloquear_saida:
                 st.error(f"❌ Estoque Insuficiente! Saldo na prateleira: {max_s} un.")
             elif saldo_futuro == 0:
-                st.warning(f"⚠️ Atenção! Esta retirada irá ZERAR o saldo físico deste insumo em estoque!")
+                st.warning("⚠️ Atenção! Esta retirada irá ZERAR o saldo físico deste insumo em estoque!")
             elif saldo_futuro < est_min_s:
                 st.warning(f"⚠️ Alerta! Esta retirada deixará o saldo ({saldo_futuro} un) ABAIXO do estoque mínimo de segurança ({est_min_s} un)!")
             else:

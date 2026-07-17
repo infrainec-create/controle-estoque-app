@@ -2,7 +2,6 @@ import os
 import sys
 import unittest
 import pandas as pd
-from datetime import datetime
 
 # --- CONFIGURAÇÃO DO AMBIENTE DE TESTE ---
 # Redireciona o banco de dados para um arquivo temporário de teste
@@ -22,7 +21,6 @@ for suffix in ["-wal", "-shm"]:
 from database.schema import init_db
 from database.queries import (
     listar_produtos,
-    listar_movimentacoes,
     cadastrar_produto,
     editar_produto,
     deletar_produto,
@@ -30,7 +28,7 @@ from database.queries import (
     registrar_entrada_produto,
     registrar_saida_produto
 )
-from utils.security import gerar_hash_senha, normalizar_usuario
+from utils.security import gerar_hash_senha
 from utils.reports import (
     gerar_excel_estoque,
     gerar_excel_movimentacoes,

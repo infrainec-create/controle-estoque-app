@@ -109,7 +109,7 @@ def render_config_ui(df):
                     if sucesso:
                         registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}, Criticidade: {crit[0]}")
                         disparar_sincronizacao()
-                        st.toast(f"➕ Cadastrado!", icon="✨")
+                        st.toast("➕ Cadastrado!", icon="✨")
                         st.rerun()
                     else:
                         st.error(f"Erro ao cadastrar insumo: {msg}")
@@ -135,7 +135,7 @@ def render_config_ui(df):
                     if sucesso:
                         registrar_log_auditoria(st.session_state["usuario_atual"], "Editar Insumo", f"Insumo ID {id_e} editado. Novo Nome: '{en}', Setor: {ec}, Mínimo: {em}, Preço: R$ {ev:.2f}, Criticidade: {ecrit[0]}")
                         disparar_sincronizacao()
-                        st.toast(f"✏️ Atualizado!", icon="⚙️")
+                        st.toast("✏️ Atualizado!", icon="⚙️")
                         st.rerun()
                     else:
                         st.error(f"Erro ao atualizar insumo: {msg}")
@@ -151,7 +151,7 @@ def render_config_ui(df):
                 if sucesso:
                     registrar_log_auditoria(st.session_state["usuario_atual"], "Excluir Insumo", f"Insumo '{s_d}' (ID {id_d}) excluído definitivamente junto com o histórico.")
                     disparar_sincronizacao()
-                    st.toast(f"🗑️ Removido!", icon="🗑️")
+                    st.toast("🗑️ Removido!", icon="🗑️")
                     st.rerun()
                 else:
                     st.error(f"Erro ao excluir insumo: {msg}")

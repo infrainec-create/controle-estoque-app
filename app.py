@@ -1,14 +1,13 @@
-import os
 import streamlit as st
 
 # ─────────────────────────────────────────────────────────────
 # IMPORTAÇÃO DE MÓDULOS INTERNOS MODULARIZADOS
 # ─────────────────────────────────────────────────────────────
-from database.connection import get_conn, DB_PATH
+from database.connection import get_conn
 from database.schema import init_db
-from database.queries import listar_produtos, listar_movimentacoes, registrar_log_auditoria
+from database.queries import listar_produtos, listar_movimentacoes
 from utils.security import inicializar_estados_sessao
-from utils.drive_sync import descarregar_do_drive, FOLDER_ID, sincronizar_banco_na_inicializacao
+from utils.drive_sync import sincronizar_banco_na_inicializacao
 from utils.session import gerenciar_timeout_sessao, recuperar_sessao_persistente
 
 # Importações de Componentes Visuais de UI

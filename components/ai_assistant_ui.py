@@ -44,8 +44,7 @@ def render_ai_assistant_ui(df):
         # CÁLCULO DAS MÉTRICAS DE PREVISÃO OPERACIONAL E GATILHOS
         # ─────────────────────────────────────────────────────────────
         import datetime
-        hoje = datetime.date.today()
-        pattern_atual = f"%/{hoje.month:02d}/{hoje.year}%"
+        datetime.date.today()
         
         metodo = st.session_state.get("metodo_consumo", "movimentacoes")
         
