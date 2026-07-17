@@ -34,7 +34,9 @@ st.markdown("""
     /* ─────────────────────────────────────────────────────────────
        GLOBAL STYLING OVERRIDES (FONTS & UTILITIES)
        ───────────────────────────────────────────────────────────── */
-    .stApp, [data-testid="stAppViewContainer"], .stApp * {
+    /* Target only text containers and elements to prevent breaking SVG/font icon layouts */
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"], 
+    .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, span, input, button, select, textarea {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
     
@@ -84,24 +86,20 @@ st.markdown("""
     .metric-card .card-value {
         font-size: 2rem;
         font-weight: 800;
-        color: var(--text-color);
+        color: var(--text-color) !important;
         line-height: 1.1;
-        background: linear-gradient(135deg, var(--text-color) 30%, rgba(128, 128, 128, 0.7) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
     }
 
     /* ─────────────────────────────────────────────────────────────
        NAV PILLS (TABS RE-DESIGN)
        ───────────────────────────────────────────────────────────── */
+    /* Clean up so they do not squeeze when there are multiple tabs */
     div[data-baseweb="tab-list"] {
         background-color: var(--secondary-background-color) !important;
         border-radius: 14px !important;
         padding: 6px !important;
         border: 1px solid rgba(128, 128, 128, 0.08) !important;
         margin-bottom: 25px !important;
-        display: flex !important;
-        justify-content: space-around !important;
     }
     
     div[data-baseweb="tab-list"] button {
@@ -113,8 +111,6 @@ st.markdown("""
         border: none !important;
         background: transparent !important;
         transition: all 0.25s ease-in-out !important;
-        flex-grow: 1 !important;
-        text-align: center !important;
         padding: 10px 16px !important;
     }
     
@@ -194,11 +190,11 @@ st.markdown("""
     /* ─────────────────────────────────────────────────────────────
        CONTAINERS WITH BORDER (BORDERED CARD-LIKE BLOCKS)
        ───────────────────────────────────────────────────────────── */
+    /* Remove padding override to allow Streamlit's inner engine to handle padding layout correctly */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         background-color: var(--secondary-background-color) !important;
         border: 1px solid rgba(128, 128, 128, 0.12) !important;
         border-radius: 20px !important;
-        padding: 25px !important;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.02) !important;
         margin-bottom: 15px !important;
     }
