@@ -30,7 +30,9 @@ def init_db():
                 pergunta_seguranca TEXT NOT NULL,
                 resposta_seguranca_hash TEXT NOT NULL,
                 aprovado INTEGER DEFAULT 0,
-                perfil TEXT DEFAULT 'Operador'
+                perfil TEXT DEFAULT 'Operador',
+                tentativas_login INTEGER DEFAULT 0,
+                bloqueado_ate TEXT
             );
             CREATE TABLE IF NOT EXISTS produtos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +76,14 @@ def init_db():
             pass
         try:
             conn.execute("ALTER TABLE usuarios ADD COLUMN perfil TEXT DEFAULT 'Operador'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN tentativas_login INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN bloqueado_ate TEXT")
         except sqlite3.OperationalError:
             pass
         try:

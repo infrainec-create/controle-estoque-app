@@ -181,11 +181,7 @@ def render_auth_ui():
                     margin-bottom: 0;
                 ">Controle de Estoque e Auditoria Avançada</p>
             </div>
-        """, unsafe_allow_html=True)
-
-        st.session_state.setdefault("login_attempts", 0)
-        st.session_state.setdefault("recovery_attempts", 0)
-        max_attempts = 5
+        """, unsafe_        max_attempts = 5
 
         aba_login, aba_cadastro, aba_recuperar = st.tabs(["🔑 Entrar no Sistema", "👤 Criar Conta", "🛠️ Esqueci a Senha"])
         
@@ -196,52 +192,97 @@ def render_auth_ui():
                 btn_login = st.form_submit_button("Acessar WMS")
                 
                 if btn_login:
-                    if st.session_state["login_attempts"] >= max_attempts:
-                        st.error("Você excedeu o número máximo de tentativas de login. Tente novamente mais tarde.")
-                    elif usr_input and pass_input:
+                    if usr_input and pass_input:
                         usr_input_norm = normalizar_usuario(usr_input)
                         try:
                             with get_conn() as conn:
-                                res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
-                        except Exception as db_err:
-                            st.error(f"❌ Erro ao acessar banco de dados: {db_err}")
-                            res = None
+                                res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario, tentativas_login, bloqueado_ate FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
+                        except Exception:
+                            # Fallback caso colunas de bloqueio persistentes não estejam criadas ainda
+                            try:
+                                with get_conn() as conn:
+                                    res = conn.execute("SELECT aprovado, perfil, senha_hash, usuario, NULL, NULL FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_input_norm,)).fetchone()
+                            except Exception as db_err:
+                                st.error(f"❌ Erro ao acessar banco de dados: {db_err}")
+                                res = None
                         
-                        from utils.security import verificar_e_atualizar_senha
-                        if res and verificar_e_atualizar_senha(res[3], pass_input, res[2]):
-                            aprovado, perfil, _, db_usr = res
-                            st.session_state["login_attempts"] = 0
-                            if aprovado == 1:
-                                session_token = str(uuid.uuid4())
-                                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                session_saved = False
+                        esta_bloqueado = False
+                        tempo_restante = 0
+                        db_usr = usr_input_norm
+                        tentativas_db = 0
+                        bloqueado_ate_str = None
+                        
+                        if res:
+                            aprovado, perfil, senha_hash, db_usr, tentativas_db, bloqueado_ate_str = res
+                            if tentativas_db is None:
+                                tentativas_db = 0
+                            if bloqueado_ate_str:
+                                try:
+                                    bloqueado_ate_dt = datetime.fromisoformat(bloqueado_ate_str)
+                                    if datetime.now() < bloqueado_ate_dt:
+                                        esta_bloqueado = True
+                                        tempo_restante = int((bloqueado_ate_dt - datetime.now()).total_seconds())
+                                except Exception:
+                                    pass
+                                    
+                        if esta_bloqueado:
+                            st.error(f"⚠️ Conta temporariamente bloqueada por muitas tentativas inválidas. Tente novamente em {tempo_restante} segundos.")
+                        else:
+                            from utils.security import verificar_e_atualizar_senha
+                            if res and verificar_e_atualizar_senha(db_usr, pass_input, senha_hash):
                                 try:
                                     with get_conn() as conn:
-                                        conn.execute("INSERT OR REPLACE INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (session_token, db_usr, now_str))
-                                    session_saved = True
-                                except Exception as db_err:
-                                    st.warning("⚠️ Não foi possível salvar a sessão persistente no banco de dados. O login continuará em modo temporário.")
-                                    print(f"Erro ao salvar sessao persistente: {db_err}")
-                                
-                                if session_saved:
-                                    st.query_params["session"] = session_token
-
-                                st.session_state["autenticado"] = True
-                                st.session_state["usuario_atual"] = db_usr
-                                st.session_state["perfil_atual"] = perfil
-                                
-                                registrar_log_auditoria(db_usr, "Login no Sistema", f"Operador realizou login com sucesso. Perfil: {perfil}.")
-                                
-                                st.toast(f"Bem-vindo de volta, {db_usr}!", icon="👋")
-                                st.rerun()
-                            elif aprovado == 2:
-                                st.error("🚫 Sua conta está suspensa temporariamente. Entre em contato com o administrador.")
+                                        conn.execute("UPDATE usuarios SET tentativas_login = 0, bloqueado_ate = NULL WHERE usuario = ?", (db_usr,))
+                                    disparar_sincronizacao()
+                                except Exception:
+                                    pass
+                                    
+                                if aprovado == 1:
+                                    session_token = str(uuid.uuid4())
+                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    session_saved = False
+                                    try:
+                                        with get_conn() as conn:
+                                            conn.execute("INSERT OR REPLACE INTO sessoes (token, usuario, data_criacao) VALUES (?, ?, ?)", (session_token, db_usr, now_str))
+                                        session_saved = True
+                                    except Exception as db_err:
+                                        st.warning("⚠️ Não foi possível salvar a sessão persistente no banco de dados. O login continuará em modo temporário.")
+                                        print(f"Erro ao salvar sessao persistente: {db_err}")
+                                    
+                                    if session_saved:
+                                        st.query_params["session"] = session_token
+ 
+                                    st.session_state["autenticado"] = True
+                                    st.session_state["usuario_atual"] = db_usr
+                                    st.session_state["perfil_atual"] = perfil
+                                    
+                                    registrar_log_auditoria(db_usr, "Login no Sistema", f"Operador realizou login com sucesso. Perfil: {perfil}.")
+                                    
+                                    st.toast(f"Bem-vindo de volta, {db_usr}!", icon="👋")
+                                    st.rerun()
+                                elif aprovado == 2:
+                                    st.error("🚫 Sua conta está suspensa temporariamente. Entre em contato com o administrador.")
+                                else:
+                                    st.error("⏳ Seu cadastro está pendente de aprovação. Solicite ao administrador a liberação do seu acesso.")
                             else:
-                                st.error("⏳ Seu cadastro está pendente de aprovação. Solicite ao administrador a liberação do seu acesso.")
-                        else:
-                            st.session_state["login_attempts"] += 1
-                            tentativas_restantes = max_attempts - st.session_state["login_attempts"]
-                            st.error(f"❌ Usuário ou senha incorretos. Tente novamente. Restam {tentativas_restantes} tentativas.")
+                                novas_tentativas = tentativas_db + 1
+                                novo_bloqueio_str = None
+                                if novas_tentativas >= max_attempts:
+                                    from datetime import timedelta
+                                    bloqueado_ate_dt = datetime.now() + timedelta(seconds=60)
+                                    novo_bloqueio_str = bloqueado_ate_dt.isoformat()
+                                    st.error(f"⚠️ Conta bloqueada por 60 segundos devido a {max_attempts} tentativas inválidas consecutivas.")
+                                else:
+                                    tentativas_restantes = max_attempts - novas_tentativas
+                                    st.error(f"❌ Usuário ou senha incorretos. Tente novamente. Restam {tentativas_restantes} tentativas.")
+                                
+                                if res:
+                                    try:
+                                        with get_conn() as conn:
+                                            conn.execute("UPDATE usuarios SET tentativas_login = ?, bloqueado_ate = ? WHERE usuario = ?", (novas_tentativas, novo_bloqueio_str, db_usr))
+                                        disparar_sincronizacao()
+                                    except Exception:
+                                        pass
                     else:
                         st.warning("Preencha todos os campos para fazer o login.")
                         
@@ -302,25 +343,43 @@ def render_auth_ui():
                         
         with aba_recuperar:
             st.subheader("🛠️ Redefinição de Credencial")
-            if st.session_state["recovery_attempts"] >= max_attempts:
-                st.error("Você excedeu o número máximo de tentativas de recuperação de senha. Tente novamente mais tarde.")
-            else:
-                usr_recup = st.text_input("Digite o usuário que deseja redefinir:").strip()
-                 
-                if usr_recup:
-                    usr_recup_norm = normalizar_usuario(usr_recup)
+            usr_recup = st.text_input("Digite o usuário que deseja redefinir:").strip()
+             
+            if usr_recup:
+                usr_recup_norm = normalizar_usuario(usr_recup)
+                try:
+                    with get_conn() as conn:
+                        dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario, tentativas_login, bloqueado_ate FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
+                except Exception:
                     try:
                         with get_conn() as conn:
-                            dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
+                            dados_usr = conn.execute("SELECT pergunta_seguranca, aprovado, resposta_seguranca_hash, usuario, NULL, NULL FROM usuarios WHERE LOWER(usuario) = LOWER(?)", (usr_recup_norm,)).fetchone()
                     except Exception as db_err:
                         st.error(f"❌ Erro ao consultar banco de dados: {db_err}")
                         dados_usr = None
-                     
-                    if dados_usr:
-                        db_usr = dados_usr[3]
+                 
+                if dados_usr:
+                    db_usr = dados_usr[3]
+                    tentativas_db = dados_usr[4] if dados_usr[4] is not None else 0
+                    bloqueado_ate_str = dados_usr[5]
+                    
+                    esta_bloqueado = False
+                    tempo_restante = 0
+                    if bloqueado_ate_str:
+                        try:
+                            bloqueado_ate_dt = datetime.fromisoformat(bloqueado_ate_str)
+                            if datetime.now() < bloqueado_ate_dt:
+                                esta_bloqueado = True
+                                tempo_restante = int((bloqueado_ate_dt - datetime.now()).total_seconds())
+                        except Exception:
+                            pass
+                    
+                    if esta_bloqueado:
+                        st.error(f"⚠️ Conta temporariamente bloqueada por muitas tentativas inválidas. Tente novamente em {tempo_restante} segundos.")
+                    else:
                         st.info(f"Pergunta de Segurança: **{dados_usr[0]}**")
-                        resp_recup = st.text_input("Digite a sua resposta secreta:", type="password").strip().lower()
-                        nova_senha = st.text_input("Digite a sua Nova Senha:", type="password")
+                        resp_recup = st.text_input("Digite a sua resposta secreta:", type="password", key="recovery_resp").strip().lower()
+                        nova_senha = st.text_input("Digite a sua Nova Senha:", type="password", key="recovery_pass")
                          
                         if st.button("💾 Gravar Nova Senha"):
                             if resp_recup and nova_senha:
@@ -333,20 +392,35 @@ def render_auth_ui():
                                     if verificar_senha(resp_recup, hash_salvo_resp):
                                         try:
                                             with get_conn() as conn:
-                                                conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ? WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
+                                                conn.execute("UPDATE usuarios SET senha_hash = ?, resposta_seguranca_hash = ?, tentativas_login = 0, bloqueado_ate = NULL WHERE usuario = ?", (gerar_hash_senha(nova_senha), gerar_hash_senha(resp_recup), db_usr))
                                              
-                                            st.session_state["recovery_attempts"] = 0
                                             registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
                                              
                                             disparar_sincronizacao()
                                             st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
+                                            st.rerun()
                                         except Exception as db_err:
                                             st.error(f"❌ Erro ao atualizar senha no banco: {db_err}")
                                     else:
-                                        st.session_state["recovery_attempts"] += 1
-                                        tentativas_restantes = max_attempts - st.session_state["recovery_attempts"]
-                                        st.error(f"❌ Resposta de segurança incorreta. Tente novamente. Restam {tentativas_restantes} tentativas.")
+                                        novas_tentativas = tentativas_db + 1
+                                        novo_bloqueio_str = None
+                                        if novas_tentativas >= max_attempts:
+                                            from datetime import timedelta
+                                            bloqueado_ate_dt = datetime.now() + timedelta(seconds=60)
+                                            novo_bloqueio_str = bloqueado_ate_dt.isoformat()
+                                            st.error(f"⚠️ Conta bloqueada por 60 segundos devido a {max_attempts} tentativas inválidas consecutivas.")
+                                        else:
+                                            tentativas_restantes = max_attempts - novas_tentativas
+                                            st.error(f"❌ Resposta de segurança incorreta. Tente novamente. Restam {tentativas_restantes} tentativas.")
+                                        
+                                        try:
+                                            with get_conn() as conn:
+                                                conn.execute("UPDATE usuarios SET tentativas_login = ?, bloqueado_ate = ? WHERE usuario = ?", (novas_tentativas, novo_bloqueio_str, db_usr))
+                                            disparar_sincronizacao()
+                                            st.rerun()
+                                        except Exception:
+                                            pass
                             else:
                                 st.warning("Preencha a resposta secreta e a nova senha para continuar.")
-                    else:
-                        st.error("Usuário não encontrado na base do sistema.")
+                else:
+                    st.error("Usuário não encontrado na base do sistema.")

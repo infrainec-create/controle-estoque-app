@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from database.connection import get_conn, retry_db_operation
+from database.connection import get_conn, retry_db_operation, DB_PATH
 from utils.date_helpers import formatar_timestamp_utc
 
 @st.cache_data
@@ -176,6 +176,16 @@ def arquivar_logs_antigos(dias=90):
                 chunk = ids_to_delete[i:i+900]
                 placeholders = ",".join("?" for _ in chunk)
                 conn.execute(f"DELETE FROM logs_auditoria WHERE id IN ({placeholders})", chunk)
+            
+        # Otimização física do banco SQLite: executa VACUUM fora de transação
+        import sqlite3
+        try:
+            conn_vac = sqlite3.connect(DB_PATH)
+            conn_vac.isolation_level = None  # Modo autocommit
+            conn_vac.execute("VACUUM;")
+            conn_vac.close()
+        except Exception:
+            pass
             
         return True, csv_content, len(df_arquivar)
     except Exception as e:
