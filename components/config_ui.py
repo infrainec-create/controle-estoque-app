@@ -23,7 +23,7 @@ def render_config_ui(df):
                     with get_conn() as conn:
                         conn.execute("UPDATE usuarios SET aprovado = 1, perfil = ? WHERE usuario = ?", (perfil_alvo, usr_alvo))
                     registrar_log_auditoria(st.session_state["usuario_atual"], "Aprovar Operador", f"Operador '{usr_alvo}' aprovado com perfil '{perfil_alvo}'.")
-                    disparar_sincronizacao()
+                    disparar_sincronizacao(bloqueante=True)
                     st.success(f"Operador '{usr_alvo}' liberado como {perfil_alvo}!")
                     st.rerun()
             with c_rec:
@@ -31,7 +31,7 @@ def render_config_ui(df):
                     with get_conn() as conn:
                         conn.execute("DELETE FROM usuarios WHERE usuario = ?", (usr_alvo,))
                     registrar_log_auditoria(st.session_state["usuario_atual"], "Recusar Operador", f"Solicitação de cadastro do operador '{usr_alvo}' recusada.")
-                    disparar_sincronizacao()
+                    disparar_sincronizacao(bloqueante=True)
                     st.warning(f"A solicitação de '{usr_alvo}' foi excluída.")
                     st.rerun()
     else:
@@ -74,7 +74,7 @@ def render_config_ui(df):
                     else:
                         with get_conn() as conn:
                             conn.execute("UPDATE usuarios SET perfil = ?, aprovado = ? WHERE usuario = ?", (novo_perfil, status_num, usr_editar))
-                        disparar_sincronizacao()
+                        disparar_sincronizacao(bloqueante=True)
                         st.success("Configurações atualizadas!")
                         st.rerun()
                 else:
@@ -85,7 +85,7 @@ def render_config_ui(df):
                     detalhe_log = f"Perfil de '{usr_editar}' atualizado para '{novo_perfil}' e Status para '{status_log_txt}'."
                     registrar_log_auditoria(st.session_state["usuario_atual"], "Gerenciamento de Operador", detalhe_log)
                     
-                    disparar_sincronizacao()
+                    disparar_sincronizacao(bloqueante=True)
                     st.success(f"Alterações salvas para '{usr_editar}' com sucesso!")
                     st.rerun()
                     

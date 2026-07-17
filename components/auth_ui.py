@@ -342,7 +342,7 @@ def render_auth_ui():
                                          
                                         registrar_log_auditoria(cleaned_username if status_inicial == 1 else "Sistema", "Solicitação de Cadastro", f"Solicitação de cadastro enviada para o usuário '{cleaned_username}' (Perfil inicial: {perfil_inicial}, Aprovado: {'Sim' if status_inicial == 1 else 'Não'}).")
                                          
-                                        disparar_sincronizacao()
+                                        disparar_sincronizacao(bloqueante=True)
                                         if status_inicial == 1:
                                             st.success("👑 Conta de administrador master criada! Vá para a aba Entrar e realize o login.")
                                         else:
@@ -407,7 +407,7 @@ def render_auth_ui():
                                              
                                             registrar_log_auditoria(db_usr, "Recuperação de Senha", f"Usuário '{db_usr}' redefiniu sua senha de acesso via pergunta de segurança.")
                                              
-                                            disparar_sincronizacao()
+                                            disparar_sincronizacao(bloqueante=True)
                                             st.success("✅ Senha redefinida com sucesso! Pode voltar para a tela de login.")
                                             st.rerun()
                                         except Exception as db_err:

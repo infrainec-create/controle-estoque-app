@@ -136,7 +136,14 @@ def sincronizar_banco_na_inicializacao():
             pass
 
     if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0 or not has_users:
-        sucesso = descarregar_do_drive()
+        sucesso = False
+        import time
+        for attempt in range(4):
+            sucesso = descarregar_do_drive()
+            if sucesso:
+                break
+            time.sleep(2 ** attempt)  # Retentativa com backoff exponencial (1s, 2s, 4s)
+            
         if not sucesso:
             if os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0 and has_users:
                 # Se falhou ao baixar mas já temos um banco local com usuários válidos, continuamos offline
@@ -387,7 +394,7 @@ def _executar_sincronizacao_drive_interna():
             except Exception:
                 pass
 
-def disparar_sincronizacao():
+def disparar_sincronizacao(bloqueante=False):
     limpar_cache_consultas()
     
     if st.session_state.get("db_sincronizado") == "local":
@@ -403,8 +410,12 @@ def disparar_sincronizacao():
     except Exception:
         pass
 
-    _set_sync_status(1, "Sincronizando em segundo plano...")
-    threading.Thread(target=executar_sincronizacao_drive).start()
+    if bloqueante:
+        _set_sync_status(1, "Sincronizando de forma síncrona...")
+        executar_sincronizacao_drive()
+    else:
+        _set_sync_status(1, "Sincronizando em segundo plano...")
+        threading.Thread(target=executar_sincronizacao_drive).start()
 
 def descarregar_do_drive():
     try:
