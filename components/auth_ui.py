@@ -181,7 +181,8 @@ def render_auth_ui():
                     margin-bottom: 0;
                 ">Controle de Estoque e Auditoria Avançada</p>
             </div>
-        """, unsafe_        max_attempts = 5
+        """, unsafe_allow_html=True)
+        max_attempts = 5
 
         aba_login, aba_cadastro, aba_recuperar = st.tabs(["🔑 Entrar no Sistema", "👤 Criar Conta", "🛠️ Esqueci a Senha"])
         
