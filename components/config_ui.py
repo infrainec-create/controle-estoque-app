@@ -74,6 +74,7 @@ def render_config_ui(df):
                     else:
                         with get_conn() as conn:
                             conn.execute("UPDATE usuarios SET perfil = ?, aprovado = ? WHERE usuario = ?", (novo_perfil, status_num, usr_editar))
+                        disparar_sincronizacao()
                         st.success("Configurações atualizadas!")
                         st.rerun()
                 else:
@@ -104,11 +105,14 @@ def render_config_ui(df):
             crit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=1)
             if st.form_submit_button("Cadastrar"):
                 if n.strip():
-                    cadastrar_produto(n.strip(), m, v, c, l, crit[0])
-                    registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}, Criticidade: {crit[0]}")
-                    disparar_sincronizacao()
-                    st.toast(f"➕ Cadastrado!", icon="✨")
-                    st.rerun()
+                    sucesso, msg = cadastrar_produto(n.strip(), m, v, c, l, crit[0])
+                    if sucesso:
+                        registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}, Criticidade: {crit[0]}")
+                        disparar_sincronizacao()
+                        st.toast(f"➕ Cadastrado!", icon="✨")
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao cadastrar insumo: {msg}")
                 
     with a2:
         if not df.empty:
@@ -127,11 +131,14 @@ def render_config_ui(df):
                 ev = st.number_input("Preço Médio", value=float(p_at["valor_unitario"]), min_value=0.0)
                 ecrit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=idx_crit)
                 if st.form_submit_button("Atualizar"):
-                    editar_produto(id_e, en, em, ev, ec, el, ecrit[0])
-                    registrar_log_auditoria(st.session_state["usuario_atual"], "Editar Insumo", f"Insumo ID {id_e} editado. Novo Nome: '{en}', Setor: {ec}, Mínimo: {em}, Preço: R$ {ev:.2f}, Criticidade: {ecrit[0]}")
-                    disparar_sincronizacao()
-                    st.toast(f"✏️ Atualizado!", icon="⚙️")
-                    st.rerun()
+                    sucesso, msg = editar_produto(id_e, en, em, ev, ec, el, ecrit[0])
+                    if sucesso:
+                        registrar_log_auditoria(st.session_state["usuario_atual"], "Editar Insumo", f"Insumo ID {id_e} editado. Novo Nome: '{en}', Setor: {ec}, Mínimo: {em}, Preço: R$ {ev:.2f}, Criticidade: {ecrit[0]}")
+                        disparar_sincronizacao()
+                        st.toast(f"✏️ Atualizado!", icon="⚙️")
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao atualizar insumo: {msg}")
                     
     with a3:
         if not df.empty:
@@ -140,14 +147,14 @@ def render_config_ui(df):
             id_d = op_d[s_d]
             confirmar = st.checkbox("Confirmo que pretendo apagar este insumo e destruir seu histórico.")
             if st.button("🗑️ Eliminar Definitivamente", type="primary", disabled=not confirmar):
-                try:
-                    deletar_produto(id_d)
+                sucesso, msg = deletar_produto(id_d)
+                if sucesso:
                     registrar_log_auditoria(st.session_state["usuario_atual"], "Excluir Insumo", f"Insumo '{s_d}' (ID {id_d}) excluído definitivamente junto com o histórico.")
                     disparar_sincronizacao()
                     st.toast(f"🗑️ Removido!", icon="🗑️")
                     st.rerun()
-                except Exception as e: 
-                    st.error(f"Erro: {e}")
+                else:
+                    st.error(f"Erro ao excluir insumo: {msg}")
 
     # --- INTEGRAÇÃO COM GOOGLE DRIVE (NUVEM) ---
     st.divider()
