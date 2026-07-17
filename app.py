@@ -26,39 +26,40 @@ from components.schedule_ui import render_schedule_ui
 st.set_page_config(page_title="WMS 5.0", page_icon="📦", layout="wide")
 
 st.markdown("""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
     <style>
-    /* Alinha os botões principais */
-    .stButton>button {
-        border-radius: 12px;
-        font-weight: 600;
-        height: 3.2em;
-        width: 100%;
-        margin-top: 10px;
-        transition: all 0.2s ease-in-out;
+    /* ─────────────────────────────────────────────────────────────
+       GLOBAL STYLING OVERRIDES (FONTS & UTILITIES)
+       ───────────────────────────────────────────────────────────── */
+    .stApp, [data-testid="stAppViewContainer"], .stApp * {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-    }
-    /* Base dos cartões de métricas Premium */
+    
+    /* ─────────────────────────────────────────────────────────────
+       PREMIUM METRIC CARDS
+       ───────────────────────────────────────────────────────────── */
     .metric-card {
-        padding: 22px;
-        border-radius: 16px;
-        background: linear-gradient(135deg, var(--secondary-background-color) 0%, rgba(128, 128, 128, 0.03) 100%);
+        padding: 24px;
+        border-radius: 20px;
+        background: linear-gradient(135deg, var(--secondary-background-color) 0%, rgba(0, 114, 255, 0.02) 100%);
         color: var(--text-color);
         border: 1px solid rgba(128, 128, 128, 0.12);
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.03);
-        margin-bottom: 15px;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.02);
+        margin-bottom: 20px;
+        transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
         position: relative;
         overflow: hidden;
     }
+    
     .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
-        border-color: rgba(128, 128, 128, 0.25);
+        transform: translateY(-4px);
+        box-shadow: 0 16px 35px rgba(0, 114, 255, 0.08);
+        border-color: rgba(0, 114, 255, 0.35);
     }
-    /* Brilho sutil no canto superior-esquerdo */
+    
     .metric-card::before {
         content: "";
         position: absolute;
@@ -66,28 +67,143 @@ st.markdown("""
         left: 0;
         width: 100%;
         height: 100%;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 50%);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 60%);
         pointer-events: none;
     }
-    /* Elementos internos do card */
+    
     .metric-card .card-title {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: var(--text-color);
-        opacity: 0.75;
-        letter-spacing: 0.8px;
-        text-transform: uppercase;
-        margin-bottom: 8px;
-    }
-    .metric-card .card-value {
-        font-size: 1.85rem;
+        font-size: 0.8rem;
         font-weight: 700;
         color: var(--text-color);
-        line-height: 1.1;
-    }
-    .stNumberInput, .stTextInput, .stSelectbox {
+        opacity: 0.65;
+        letter-spacing: 1px;
+        text-transform: uppercase;
         margin-bottom: 10px;
     }
+    
+    .metric-card .card-value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: var(--text-color);
+        line-height: 1.1;
+        background: linear-gradient(135deg, var(--text-color) 30%, rgba(128, 128, 128, 0.7) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       NAV PILLS (TABS RE-DESIGN)
+       ───────────────────────────────────────────────────────────── */
+    div[data-baseweb="tab-list"] {
+        background-color: var(--secondary-background-color) !important;
+        border-radius: 14px !important;
+        padding: 6px !important;
+        border: 1px solid rgba(128, 128, 128, 0.08) !important;
+        margin-bottom: 25px !important;
+        display: flex !important;
+        justify-content: space-around !important;
+    }
+    
+    div[data-baseweb="tab-list"] button {
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+        color: var(--text-color) !important;
+        opacity: 0.7;
+        border: none !important;
+        background: transparent !important;
+        transition: all 0.25s ease-in-out !important;
+        flex-grow: 1 !important;
+        text-align: center !important;
+        padding: 10px 16px !important;
+    }
+    
+    div[data-baseweb="tab-list"] button:hover {
+        opacity: 1 !important;
+        color: var(--primary-color) !important;
+    }
+    
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background-color: var(--background-color) !important;
+        color: var(--primary-color) !important;
+        opacity: 1 !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+    }
+    
+    div[data-baseweb="tab-highlight"] {
+        display: none !important;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       INPUT FIELDS (TEXT, NUMBER, SELECTBOX, TEXTAREA)
+       ───────────────────────────────────────────────────────────── */
+    div[data-testid="stTextInput"] input, 
+    div[data-testid="stNumberInput"] input, 
+    div[data-testid="stSelectbox"] select, 
+    div[data-testid="stTextArea"] textarea {
+        border-radius: 10px !important;
+        border: 1px solid rgba(128, 128, 128, 0.18) !important;
+        background-color: var(--background-color) !important;
+        color: var(--text-color) !important;
+        padding: 10px 14px !important;
+        font-size: 0.92rem !important;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+    
+    div[data-testid="stTextInput"] input:focus, 
+    div[data-testid="stNumberInput"] input:focus, 
+    div[data-testid="stSelectbox"] select:focus, 
+    div[data-testid="stTextArea"] textarea:focus {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 3px rgba(0, 114, 255, 0.12) !important;
+        outline: none !important;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       BUTTON STYLING (GLOBAL SENSE)
+       ───────────────────────────────────────────────────────────── */
+    div.stButton > button, button[type="submit"] {
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        border: 1px solid rgba(128, 128, 128, 0.15) !important;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.02) !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    div.stButton > button:hover, button[type="submit"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08) !important;
+        border-color: var(--primary-color) !important;
+    }
+    
+    /* Primary buttons (blue gradient) */
+    div.stButton > button[kind="primary"], button[type="submit"] {
+        background: linear-gradient(135deg, #0072FF 0%, #00C6FF 100%) !important;
+        color: white !important;
+        border: none !important;
+        box-shadow: 0 4px 15px rgba(0, 114, 255, 0.2) !important;
+    }
+    
+    div.stButton > button[kind="primary"]:hover, button[type="submit"]:hover {
+        background: linear-gradient(135deg, #0056b3 0%, #0072FF 100%) !important;
+        box-shadow: 0 8px 25px rgba(0, 114, 255, 0.3) !important;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       CONTAINERS WITH BORDER (BORDERED CARD-LIKE BLOCKS)
+       ───────────────────────────────────────────────────────────── */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: var(--secondary-background-color) !important;
+        border: 1px solid rgba(128, 128, 128, 0.12) !important;
+        border-radius: 20px !important;
+        padding: 25px !important;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.02) !important;
+        margin-bottom: 15px !important;
+    }
+
+    /* Hide MainMenu & Footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
