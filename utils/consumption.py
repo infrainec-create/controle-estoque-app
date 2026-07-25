@@ -175,3 +175,121 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
             df.at[idx, 'tendencia'] = "➡️ Estável"
             
     return df
+
+
+def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', janela_dias=30):
+    """
+    Realiza a projecao preditiva de demanda baseada em media movel ponderada
+    e tendencia das ultimas semanas para os proximos 30, 60 e 90 dias.
+    Calcula tambem o Runway (dias ate esgotamento) e a data estimada de ruptura.
+    """
+    df = processar_consumo_produtos(df_produtos, metodo, janela_dias)
+    agora = datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
+    
+    # Adicionar colunas preditivas
+    df['prev_30d'] = 0.0
+    df['prev_60d'] = 0.0
+    df['prev_90d'] = 0.0
+    df['runway_dias'] = 999.0
+    df['data_esgotamento'] = 'Indeterminado (Sem consumo)'
+    df['giro_anual'] = 0.0
+    df['status_cobertura'] = '🟢 Saudável'
+    
+    for idx, row in df.iterrows():
+        consumo_diario = row.get('consumo_diario', 0.0)
+        s1 = row.get('consumo_s1', 0)
+        s2 = row.get('consumo_s2', 0)
+        s3 = row.get('consumo_s3', 0)
+        saldo = row.get('saldo_atual', 0)
+        
+        # Consumo diario ponderado (S-1 com peso 50%, S-2 peso 30%, S-3 peso 20%)
+        # Se houver histórico de semanas, calcula média móvel ponderada
+        s_total = s1 + s2 + s3
+        if s_total > 0:
+            consumo_semanal_ponderado = (s1 * 0.5) + (s2 * 0.3) + (s3 * 0.2)
+            c_diario_ponderado = max(consumo_diario, consumo_semanal_ponderado / 7.0)
+        else:
+            c_diario_ponderado = consumo_diario
+            
+        prev_30 = c_diario_ponderado * 30
+        prev_60 = c_diario_ponderado * 60
+        prev_90 = c_diario_ponderado * 90
+        
+        df.at[idx, 'prev_30d'] = round(prev_30, 1)
+        df.at[idx, 'prev_60d'] = round(prev_60, 1)
+        df.at[idx, 'prev_90d'] = round(prev_90, 1)
+        
+        # Giro anualizado (Consumo em 365 dias / Estoque Médio)
+        if saldo > 0:
+            df.at[idx, 'giro_anual'] = round((c_diario_ponderado * 365.0) / float(saldo), 2)
+        else:
+            df.at[idx, 'giro_anual'] = 0.0
+            
+        # Runway e Data de esgotamento
+        if c_diario_ponderado > 0:
+            runway = float(saldo) / c_diario_ponderado
+            df.at[idx, 'runway_dias'] = round(runway, 1)
+            data_ruptura = agora + timedelta(days=int(runway))
+            df.at[idx, 'data_esgotamento'] = data_ruptura.strftime('%d/%m/%Y')
+            
+            if runway <= 7:
+                df.at[idx, 'status_cobertura'] = '🔴 Risco Crítico (< 7 dias)'
+            elif runway <= 15:
+                df.at[idx, 'status_cobertura'] = '🟠 Alerta de Pedido (7-15 dias)'
+            elif runway <= 30:
+                df.at[idx, 'status_cobertura'] = '🟡 Cobertura Curta (15-30 dias)'
+            else:
+                df.at[idx, 'status_cobertura'] = '🟢 Cobertura Confortável (> 30 dias)'
+        else:
+            df.at[idx, 'runway_dias'] = 999.0
+            df.at[idx, 'data_esgotamento'] = 'N/A (Sem Saídas)'
+            if saldo > 0:
+                df.at[idx, 'status_cobertura'] = '⚪ Parado sem Giro'
+            else:
+                df.at[idx, 'status_cobertura'] = '🔴 Estoque Zerado'
+                
+    return df
+
+
+def calcular_custo_posse_estoque(df_produtos, taxa_anual_posse=0.15):
+    """
+    Calcula as metricas de Custo de Posse/Carregamento do Estoque (Carrying Cost)
+    e identifica capital imobilizado parado (sem giro).
+    Taxa padrao de posse: 15% ao ano (~1.25% ao mes).
+    """
+    df = df_produtos.copy()
+    if 'valor_unitario' not in df.columns or 'saldo_atual' not in df.columns:
+        return {}
+        
+    df['valor_total'] = df['saldo_atual'] * df['valor_unitario']
+    valuation_total = float(df['valor_total'].sum())
+    
+    # Custo de Posse Mensal e Anual
+    custo_posse_anual = valuation_total * taxa_anual_posse
+    custo_posse_mensal = custo_posse_anual / 12.0
+    
+    # Identificar itens sem giro (Consumo diário zero ou muito baixo e saldo > 0)
+    consumo_col = 'consumo_diario' if 'consumo_diario' in df.columns else None
+    if consumo_col:
+        mask_parado = (df['saldo_atual'] > 0) & (df[consumo_col] == 0)
+    else:
+        mask_parado = (df['saldo_atual'] > 0)
+        
+    df_parados = df[mask_parado].copy()
+    valor_parado = float(df_parados['valor_total'].sum()) if not df_parados.empty else 0.0
+    pct_capital_parado = (valor_parado / valuation_total * 100.0) if valuation_total > 0 else 0.0
+    
+    # Custo de oportunidade mensal do capital parado
+    custo_parado_mensal = valor_parado * (taxa_anual_posse / 12.0)
+    
+    return {
+        'valuation_total': valuation_total,
+        'custo_posse_anual': custo_posse_anual,
+        'custo_posse_mensal': custo_posse_mensal,
+        'valor_capital_parado': valor_parado,
+        'pct_capital_parado': round(pct_capital_parado, 1),
+        'custo_parado_mensal': custo_parado_mensal,
+        'taxa_anual_posse': taxa_anual_posse,
+        'total_itens_parados': len(df_parados),
+        'df_parados': df_parados
+    }

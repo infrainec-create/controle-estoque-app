@@ -272,9 +272,10 @@ def gerar_excel_auditoria(logs):
 
 def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
     """
-    Compila um relatório executivo de alta fidelidade visual (HTML) otimizado para salvamento em PDF / Impressão.
+    Compila um relatório executivo de alta fidelidade visual (HTML) otimizado para salvamento em PDF / Impressão,
+    incluindo Valuation, Análise Preditiva de Demanda (30/60/90 dias) e Custo de Posse de Estoque (Carrying Cost).
     """
-    from utils.consumption import processar_consumo_produtos
+    from utils.consumption import processar_consumo_produtos, calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
     
     # 1. Carregar método da sessão se não fornecido
     if metodo is None:
@@ -318,8 +319,9 @@ def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
         
     df_calc["Classe_ABC"] = df_calc["id"].map(classes_map).fillna("C")
     
-    # Processar consumo via função oficial do sistema (alinhada ao painel)
-    df_calc = processar_consumo_produtos(df_calc, metodo, janela_dias)
+    # Processar consumo preditivo e custo de posse
+    df_calc = calcular_previsao_demanda_preditiva(df_calc, metodo, janela_dias)
+    custo_posse_info = calcular_custo_posse_estoque(df_calc)
     
     # Ponto de Pedido / Ressuprimento alinhado ao dashboard
     def obter_fator_setor(row):

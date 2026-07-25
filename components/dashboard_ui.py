@@ -1,3 +1,4 @@
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -220,7 +221,13 @@ def render_dashboard_ui(df):
 
     st.divider()
     
-    g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🔍 Matriz ABC-XYZ (Criticidade)", "🎯 Matriz de Risco & Lead Time"])
+    g_tabs = st.tabs([
+        "📈 Distribuição & Giro", 
+        "🏆 Curva ABC (Financeiro)", 
+        "🔍 Matriz ABC-XYZ (Criticidade)", 
+        "🎯 Matriz de Risco & Lead Time",
+        "🔮 Previsão Preditiva & Posse"
+    ])
     
     with g_tabs[0]:
         g1, g2 = st.columns(2)
@@ -445,6 +452,69 @@ def render_dashboard_ui(df):
         else:
             st.info("Cadastre lead times válidos nos produtos para visualizar as médias por setor.")
             
+    with g_tabs[4]:
+        st.markdown("##### 🔮 Previsão Preditiva de Demanda & Custo de Armazenamento (Carrying Cost)")
+        st.caption("Cálculo preditivo de demanda baseado na tendência ponderada das semanas e análise financeira do capital imobilizado parado.")
+        
+        from utils.consumption import calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
+        df_pred = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)
+        info_posse = calcular_custo_posse_estoque(df_pred)
+        
+        c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+        val_tot = info_posse.get('valuation_total', 0.0)
+        c_posse_m = info_posse.get('custo_posse_mensal', 0.0)
+        cap_parado = info_posse.get('valor_capital_parado', 0.0)
+        prev_30_tot = df_pred['prev_30d'].sum() if 'prev_30d' in df_pred.columns else 0.0
+        
+        c_p1.metric("💰 Valuation Total do Estoque", f"R$ {val_tot:,.2f}")
+        c_p2.metric("📦 Custo Mensal de Posse (~1.25%/mês)", f"R$ {c_posse_m:,.2f}", "Oportunidade/Carregamento")
+        c_p3.metric("🛑 Capital Imobilizado Parado", f"R$ {cap_parado:,.2f}", f"{info_posse.get('pct_capital_parado', 0.0)}% do estoque")
+        c_p4.metric("🔮 Demanda Prevista (30 dias)", f"{prev_30_tot:,.0f} un.", "Consumo Preditivo")
+        
+        st.divider()
+        
+        c_g1, c_g2 = st.columns(2)
+        with c_g1:
+            st.markdown("###### 📊 Projeção Preditiva de Demanda por Setor (30d, 60d, 90d)")
+            if not df_pred.empty:
+                df_pred_setor = df_pred.groupby("categoria")[['prev_30d', 'prev_60d', 'prev_90d']].sum().reset_index()
+                fig_pred = go.Figure()
+                fig_pred.add_trace(go.Bar(x=df_pred_setor["categoria"], y=df_pred_setor["prev_30d"], name="30 Dias", marker_color="#0072FF"))
+                fig_pred.add_trace(go.Bar(x=df_pred_setor["categoria"], y=df_pred_setor["prev_60d"], name="60 Dias", marker_color="#00C6FF"))
+                fig_pred.add_trace(go.Bar(x=df_pred_setor["categoria"], y=df_pred_setor["prev_90d"], name="90 Dias", marker_color="#34D399"))
+                fig_pred.update_layout(barmode="group", height=320, margin=dict(t=20, b=20, l=10, r=10))
+                apply_premium_chart_theme(fig_pred)
+                st.plotly_chart(fig_pred, use_container_width=True)
+                
+        with c_g2:
+            st.markdown("###### 🛑 Capital Imobilizado Parado vs Em Giro por Setor")
+            if not df_pred.empty:
+                df_pred['Status_Giro'] = df_pred['consumo_diario'].apply(lambda c: 'Em Giro' if c > 0 else 'Parado / Sem Giro')
+                df_giro_setor = df_pred.groupby(['categoria', 'Status_Giro'])['valor_total'].sum().reset_index()
+                fig_giro_posse = px.bar(
+                    df_giro_setor,
+                    x="categoria",
+                    y="valor_total",
+                    color="Status_Giro",
+                    color_discrete_map={'Em Giro': '#10b859', 'Parado / Sem Giro': '#ef4444'},
+                    labels={'categoria': 'Setor', 'valor_total': 'Valor (R$)', 'Status_Giro': 'Status'}
+                )
+                fig_giro_posse.update_layout(height=320, margin=dict(t=20, b=20, l=10, r=10))
+                apply_premium_chart_theme(fig_giro_posse)
+                st.plotly_chart(fig_giro_posse, use_container_width=True)
+                
+        st.markdown("###### 📋 Tabela Preditiva de Esgotamento e Cobertura de Estoque")
+        disp_pred = df_pred[[
+            'categoria', 'nome', 'saldo_atual', 'consumo_diario', 
+            'prev_30d', 'prev_60d', 'prev_90d', 'runway_dias', 'data_esgotamento', 'status_cobertura'
+        ]].rename(columns={
+            'categoria': 'Setor', 'nome': 'Produto', 'saldo_atual': 'Saldo Físico',
+            'consumo_diario': 'Consumo/Dia', 'prev_30d': 'Prev. 30d', 'prev_60d': 'Prev. 60d',
+            'prev_90d': 'Prev. 90d', 'runway_dias': 'Runway (Dias)', 'data_esgotamento': 'Data Esgotamento Estipulada',
+            'status_cobertura': 'Status Cobertura'
+        })
+        st.dataframe(disp_pred, hide_index=True, use_container_width=True)
+            
     st.divider()
     
     # Sugestões de Compra WMS
@@ -510,3 +580,25 @@ def render_dashboard_ui(df):
         ), 
         hide_index=True, width='stretch'
     )
+
+    st.divider()
+    # Exportador do Relatório Executivo Completo
+    from utils.reports import gerar_html_pdf_estoque
+    from database.queries import listar_movimentacoes
+    mv_report = listar_movimentacoes()
+    
+    html_report_data = gerar_html_pdf_estoque(df, mv_report, None, metodo=metodo_consumo, janela_dias=janela_dias)
+    
+    col_rep1, col_rep2 = st.columns([3, 1])
+    with col_rep1:
+        st.markdown("##### 📄 Exportação do Relatório Executivo Completo WMS 5.0")
+        st.caption("Gere um relatório executivo consolidado com Valuation, Curva ABC/XYZ, Análise Preditiva e Custo de Posse em formato HTML/PDF pronto para impressão.")
+    with col_rep2:
+        st.download_button(
+            label="📄 Baixar Relatório (PDF / HTML)",
+            data=html_report_data,
+            file_name=f"Relatorio_Executivo_WMS_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            mime="text/html",
+            use_container_width=True,
+            type="primary"
+        )
