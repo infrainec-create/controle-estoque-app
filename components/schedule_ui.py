@@ -21,13 +21,28 @@ def render_schedule_ui(df):
     hoje = datetime.date.today()
     crono_hoje = calcular_previsao_entrega()
     
+    nomes_meses_pt = [
+        "", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ]
+    mes_nome_str = f"{nomes_meses_pt[crono_hoje['mes_alvo']]} de {crono_hoje['ano_alvo']}"
+    
+    if hoje < crono_hoje["inicio_solicitacao"]:
+        status_fase_str = "⏳ Aguardando Abertura da Janela"
+    elif crono_hoje["inicio_solicitacao"] <= hoje <= crono_hoje["fim_solicitacao"]:
+        status_fase_str = "🟡 Janela de Solicitação ABERTA"
+    elif crono_hoje["inicio_analise"] <= hoje <= crono_hoje["data_aprovacao"]:
+        status_fase_str = "🔵 Em Análise de Compras e Pedidos"
+    else:
+        status_fase_str = "🟢 Pedidos Emitidos - Em Trânsito"
+
     # ─── HEADER EXECUTIVO DE CRONOGRAMA ───
     st.markdown(f"""
         <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.06) 0%, rgba(59, 130, 246, 0.03) 100%); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 14px; padding: 16px 20px; margin-bottom: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                 <div>
-                    <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #8b5cf6; letter-spacing: 1px;">🚚 Status do Ciclo Atual ({crono_hoje['nome_mes']})</span>
-                    <h3 style="margin: 2px 0 0 0; font-size: 1.3rem; font-weight: 800;">{crono_hoje['status_fase']}</h3>
+                    <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #8b5cf6; letter-spacing: 1px;">🚚 Status do Ciclo Atual ({mes_nome_str})</span>
+                    <h3 style="margin: 2px 0 0 0; font-size: 1.3rem; font-weight: 800;">{status_fase_str}</h3>
                 </div>
                 <div style="text-align: right;">
                     <span style="font-size: 0.75rem; color: gray; font-weight: 600;">Data Prevista de Entrega</span>
