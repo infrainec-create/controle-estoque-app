@@ -35,8 +35,48 @@ def render_audit_ui(df):
     aud_col4.metric("👤 Auditado Por", st.session_state.get("usuario_atual", "Operador"))
 
     st.divider()
-    
-    with st.container(border=True):
+
+    # ─── INVENTÁRIO CÍCLICO GUIADO POR INTELIGÊNCIA (MATRIZ ABC-XYZ) ───
+    df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
+    df_abc = df.sort_values(by="valor_total", ascending=False).copy()
+    tot_val = df_abc["valor_total"].sum()
+    if tot_val > 0:
+        df_abc["perc_acum"] = (df_abc["valor_total"].cumsum() / tot_val) * 100
+        df_abc["Classe_ABC"] = df_abc["perc_acum"].apply(lambda p: "A" if p <= 80 else ("B" if p <= 95 else "C"))
+    else:
+        df_abc["Classe_ABC"] = "C"
+        
+    df["Classe_ABC"] = df["id"].map(dict(zip(df_abc["id"], df_abc["Classe_ABC"]))).fillna("C")
+    df["criticidade"] = df["criticidade"].fillna("Y").str.upper()
+
+    def priority_score(row):
+        abc = row["Classe_ABC"]
+        xyz = row["criticidade"]
+        if abc == "A" and xyz == "Z": return 1
+        if abc == "A" or xyz == "Z": return 2
+        if abc == "B" or xyz == "Y": return 3
+        return 4
+
+    df["Score_Prioridade"] = df.apply(priority_score, axis=1)
+    df_ciclico = df[~df["id"].isin(ids_contados_hoje)].sort_values(by=["Score_Prioridade", "valor_total"], ascending=[True, False]).head(5)
+
+    with st.expander("🎯 Plano de Contagem Cíclica Guiada do Dia (Priorização ABC-XYZ)", expanded=True):
+        st.caption("Sugestão automática de auditoria por amostragem baseada no risco financeiro (ABC) e criticidade operacional (XYZ).")
+        if not df_ciclico.empty:
+            c_items = st.columns(len(df_ciclico))
+            for idx, (_, item) in enumerate(df_ciclico.iterrows()):
+                prio_badge = "🔴 Vital (A-Z)" if item["Score_Prioridade"] == 1 else ("🟠 Alta (A/Z)" if item["Score_Prioridade"] == 2 else "🟡 Média")
+                with c_items[idx]:
+                    st.markdown(f"**{item['nome']}**")
+                    st.caption(f"Setor: {item['categoria']} | {prio_badge}")
+                    st.caption(f"Saldo: {int(item['saldo_atual'])} un")
+                    if st.button(f"🔍 Audit #{item['id']}", key=f"btn_cic_{item['id']}", use_container_width=True):
+                        st.session_state["c_p_sel_id"] = item["id"]
+                        st.rerun()
+        else:
+            st.success("🎉 Todos os insumos prioritários de hoje já foram auditados com sucesso!")
+
+    st.write("")
         st.markdown("##### ✏️ Registrar Nova Contagem Física")
         ops = {}
         for _, row in df.iterrows():
