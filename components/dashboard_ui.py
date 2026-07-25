@@ -137,10 +137,91 @@ def render_dashboard_ui(df):
     dio_medio = (valor_estoque_medio / consumo_diario_financeiro) if consumo_diario_financeiro > 0 else 999.0
     
     total_itens = len(df)
-    rupturas = (df["saldo_atual"] <= 0).sum()
-    taxa_ruptura = (rupturas / total_itens * 100) if total_itens > 0 else 0.0
+    n_ruptura = (df["saldo_atual"] <= 0).sum()
+    n_critico = ((df["saldo_atual"] > 0) & (df["saldo_atual"] < df["estoque_minimo"])).sum()
+    n_ponto_ped = ((df["saldo_atual"] >= df["estoque_minimo"]) & (df["saldo_atual"] <= df["Ponto_Pedido"])).sum()
+    n_ok = (df["saldo_atual"] > df["Ponto_Pedido"]).sum()
+    taxa_ruptura = (n_ruptura / total_itens * 100) if total_itens > 0 else 0.0
 
-    # Cartões de Métricas
+    # ─── 1. WAREHOUSE HEALTH SCORE (0-100%) ───
+    p1_atendimento = ((total_itens - (n_ruptura + n_critico)) / total_itens * 100.0) if total_itens > 0 else 100.0
+    
+    ira_percent = 100.0
+    try:
+        with get_conn() as conn:
+            cnt_row = conn.execute("SELECT COUNT(*), SUM(CASE WHEN quantidade = 0 THEN 1 ELSE 0 END) FROM movimentacoes WHERE tipo = 'Contagem'").fetchone()
+            if cnt_row and cnt_row[0] > 0:
+                ira_percent = (cnt_row[1] / cnt_row[0]) * 100.0
+    except Exception:
+        pass
+    p2_acuracidade = ira_percent
+    
+    valor_total_est = df["valor_total"].sum()
+    valor_em_giro = df[df["consumo_diario"] > 0]["valor_total"].sum()
+    p3_eficiencia = (valor_em_giro / valor_total_est * 100.0) if valor_total_est > 0 else 100.0
+    
+    health_score = round((p1_atendimento * 0.40) + (p2_acuracidade * 0.30) + (p3_eficiencia * 0.30), 1)
+    
+    if health_score >= 85:
+        badge_health = "🟢 Excelente Saúde de Estoque"
+        color_health = "#10b859"
+    elif health_score >= 70:
+        badge_health = "🟡 Estado de Alerta Moderado"
+        color_health = "#f59e0b"
+    else:
+        badge_health = "🔴 Estado Crítico Requer Atenção"
+        color_health = "#ef4444"
+        
+    st.markdown(f"""
+        <div style="background: linear-gradient(135deg, rgba(0, 114, 255, 0.05) 0%, rgba(0, 198, 255, 0.02) 100%); border: 1px solid rgba(0, 114, 255, 0.18); border-radius: 16px; padding: 18px 24px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                <div>
+                    <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #6b7280; letter-spacing: 1px;">🏥 Indicador Geral WMS</span>
+                    <h3 style="margin: 4px 0 0 0; font-size: 1.45rem; font-weight: 800; color: var(--text-color);">{badge_health}</h3>
+                    <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: gray;">Pontuação ponderada baseada no Nível de Atendimento, Acuracidade do Inventário e Giro do Capital.</p>
+                </div>
+                <div style="text-align: center; background-color: rgba(0,0,0,0.05); padding: 8px 18px; border-radius: 12px; border: 1px solid {color_health};">
+                    <span style="font-size: 0.70rem; text-transform: uppercase; color: gray; font-weight: 700;">Health Score</span>
+                    <div style="font-size: 2.1rem; font-weight: 800; color: {color_health}; line-height: 1;">{health_score}%</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 20px; margin-top: 14px; border-top: 1px solid rgba(128,128,128,0.12); padding-top: 10px; font-size: 0.82rem; flex-wrap: wrap;">
+                <div>🎯 <b>Nível de Atendimento:</b> {p1_atendimento:.1f}%</div>
+                <div>📋 <b>Acuracidade (IRA):</b> {p2_acuracidade:.1f}%</div>
+                <div>💼 <b>Capital em Giro:</b> {p3_eficiencia:.1f}%</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ─── 2. CENTRAL DE AÇÕES RECOMENDADAS DO DIA ───
+    with st.expander("🚨 Central de Ações Recomendadas do Dia", expanded=(n_ruptura + n_critico > 0)):
+        ac_c1, ac_c2, ac_c3 = st.columns(3)
+        with ac_c1:
+            st.markdown(f"**🛒 Pedidos Urgentes ({n_ruptura + n_critico + n_ponto_ped})**")
+            if n_ruptura + n_critico > 0:
+                st.error(f"⚠️ **{n_ruptura} insumos em Ruptura** e **{n_critico} em estado Crítico**. Compra prioritária recomendada!")
+            elif n_ponto_ped > 0:
+                st.warning(f"🟠 **{n_ponto_ped} insumos** atingiram o Ponto de Pedido.")
+            else:
+                st.success("🟢 Nenhum pedido urgente pendente no momento.")
+                
+        with ac_c2:
+            st.markdown("**💎 Insumo de Maior Valor em Risco**")
+            df_risco = df[df["Status"].isin(["🔴 Ruptura", "🔴 Crítico", "🟠 Ponto de Pedido"])].sort_values(by="valor_total", ascending=False)
+            if not df_risco.empty:
+                top_risco = df_risco.iloc[0]
+                st.warning(f"**{top_risco['nome']}** ({top_risco['categoria']})<br>Capital em Risco: **R$ {top_risco['valor_total']:,.2f}** ({top_risco['Status']})")
+            else:
+                st.success("🟢 Nenhum insumo relevante em situação de risco.")
+                
+        with ac_c3:
+            st.markdown("**📅 Cronograma de Suprimentos**")
+            from utils.date_helpers import calcular_previsao_entrega
+            crono_info = calcular_previsao_entrega()
+            data_ent_str = crono_info["data_entrega"].strftime("%d/%m/%Y")
+            st.info(f"🚚 Próxima janela estimada de entrega do ciclo: **{data_ent_str}**")
+
+    # Cartões de Métricas Globais
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     c1.markdown(f'''
         <div class="metric-card" style="border-top: 4px solid #3b82f6;">
@@ -180,7 +261,29 @@ def render_dashboard_ui(df):
 
     st.divider()
     
-    # Filtros Operacionais
+    # ─── 3. FILTROS RÁPIDOS EM 1-CLIQUE & BUSCA POR SETOR ───
+    st.subheader("📋 Posição de Estoque")
+    
+    if "filtro_status_pill" not in st.session_state:
+        st.session_state["filtro_status_pill"] = "Todos"
+        
+    f_pills = st.columns(5)
+    if f_pills[0].button(f"📊 Todos ({total_itens})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "Todos" else "secondary"):
+        st.session_state["filtro_status_pill"] = "Todos"
+        st.rerun()
+    if f_pills[1].button(f"🔴 Ruptura ({n_ruptura})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Ruptura" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🔴 Ruptura"
+        st.rerun()
+    if f_pills[2].button(f"🔴 Crítico ({n_critico})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Crítico" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🔴 Crítico"
+        st.rerun()
+    if f_pills[3].button(f"🟠 Ponto Pedido ({n_ponto_ped})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟠 Ponto de Pedido" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🟠 Ponto de Pedido"
+        st.rerun()
+    if f_pills[4].button(f"🟢 OK ({n_ok})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟢 OK" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🟢 OK"
+        st.rerun()
+
     cp1, cp2 = st.columns([1, 1])
     with cp1:
         setores = ["Todos"] + list(df["categoria"].unique())
@@ -188,14 +291,16 @@ def render_dashboard_ui(df):
     with cp2:
         busca_nome = st.text_input("🔍 Busca Rápida por Nome do Insumo:")
     
+    # Aplica os filtros combinados (Status Pill, Setor e Busca Textual)
     df_filtrado = df.copy()
+    if st.session_state["filtro_status_pill"] != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["Status"] == st.session_state["filtro_status_pill"]]
+        
     if setor_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
     if busca_nome.strip():
         df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
 
-    st.subheader("📋 Posição de Estoque")
-    
     def destacar_status(val):
         if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
         if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
