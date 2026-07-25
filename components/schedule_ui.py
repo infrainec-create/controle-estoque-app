@@ -184,43 +184,24 @@ def render_schedule_ui(df):
     """, unsafe_allow_html=True)
 
     # --- 5. DETALHES DAS REGRAS LOGÍSTICAS ---
-    with st.expander("ℹ️ Regras Operacionais de Abastecimento (Informações)", expanded=False):
+    with st.expander("ℹ️ Regras Operacionais de Abastecimento (Fluxo Oficial WMS 5.0)", expanded=False):
         st.markdown(f"""
-        * **Prazo de Solicitação**: As requisições de reabastecimento devem ser salvas de **{params['dias_antes_fim_sol']} a {params['dias_antes_inicio_sol']} dias antes do fechamento do mês anterior** (para o mês de {formatar_opcao(mes_sel).split(' de ')[0]}, a janela vai de `{inicio_sol_f}` a `{fim_sol_f}`).
-        * **Início de Análise (Setor de Compras)**: O setor administrativo/compras consolida e inicia a análise no **primeiro dia útil do mês de referência** (`{inicio_an_f}`).
-        * **Lead Time Interno ({params['dias_uteis_analise']} dias úteis)**: Prazo do setor de compras para realizar cotações e aprovar os pedidos (`{inicio_an_f}` até `{aprov_f}`).
-        * **Lead Time Externo / Fornecedor ({params['dias_uteis_entrega']} dias úteis)**: Prazo máximo estipulado para que o fornecedor efetue a entrega física no almoxarifado (`{aprov_f}` até `{entrega_f}`).
-        * **Lead Time Total**: **{params['dias_uteis_analise'] + params['dias_uteis_entrega']} dias úteis** contados a partir do início do mês de referência.
+        * **1. Solicitação de Compras (Último Dia Útil)**: A requisição de compra é gerada no **último dia útil do mês anterior** (`{inicio_sol_f}`).
+        * **2. Atendimento do Setor de Compras (5 Dias Úteis)**: O setor de compras possui o prazo fixo de **5 dias úteis** a partir da solicitação para cotar e aprovar os pedidos de reposição (`{inicio_an_f}` até `{aprov_f}`).
+        * **3. Entrega do Fornecedor (3 Dias Úteis)**: O fornecedor possui o prazo de **3 dias úteis** a contar da emissão do pedido para realizar a entrega física na prateleira (`{aprov_f}` até `{entrega_f}`).
+        * **4. Base de Cálculo da Demanda**: A sugestão de compra é calculada utilizando estritamente as **divergências de consumo das últimas 3 semanas (S-3, S-2 e S-1)** apuradas nos **3 últimos inventários** de contagem física.
         """)
 
     # --- 6. LISTA DE COMPRAS SUGERIDAS PARA ESTE CICLO ---
-    st.markdown("### 🛒 Planejamento e Itens do Ciclo de Compras")
+    st.markdown("### 🛒 Planejamento de Compras (Baseado nos 3 Últimos Inventários)")
     
-    # Calcular sugestão de compra dos itens com base no banco atual
-    # Para isso, primeiro rodamos os mesmos cálculos do Dashboard
-    df["valor_total"] = df["saldo_atual"] * df["valor_unitario"]
-    total_valor = df["valor_total"].sum()
+    # Processar o consumo produto por produto baseado no método de inventário das últimas 3 semanas (21 dias)
+    from utils.consumption import processar_consumo_produtos
+    df_calc = processar_consumo_produtos(df.copy(), metodo="inventario", janela_dias=21)
     
-    # Classificação ABC rápida
-    df_abc = df.sort_values(by="valor_total", ascending=False).copy()
-    classes_map = {}
-    if total_valor > 0:
-        df_abc["valor_acumulado"] = df_abc["valor_total"].cumsum()
-        df_abc["perc_acumulado"] = (df_abc["valor_acumulado"] / total_valor) * 100
-        
-        def get_class(row):
-            val = row["perc_acumulado"]
-            if val <= 80: return "Classe A"
-            if val <= 95: return "Classe B"
-            return "Classe C"
-        df_abc["Classe"] = df_abc.apply(get_class, axis=1)
-        classes_map = dict(zip(df_abc["id"], df_abc["Classe"]))
-    else:
-        classes_map = {id_p: "Classe C" for id_p in df["id"]}
-        
-    df["Classe_ABC"] = df["id"].map(classes_map).fillna("Classe C")
+    df_calc["valor_total"] = df_calc["saldo_atual"] * df_calc["valor_unitario"]
     
-    # Carrega fatores de segurança por setor configurados no banco
+    # Fatores de segurança por setor
     fatores_setor = {}
     with get_conn() as conn:
         rows_f = conn.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'fator_seguranca_%'").fetchall()
@@ -229,101 +210,75 @@ def render_schedule_ui(df):
             fatores_setor[setor_nome] = float(v)
             
     padroes = {"Limpeza": 1.1, "Copa": 1.1, "EPI": 1.2, "Escritório": 1.1, "Geral": 1.1}
-    
     def obter_fator_setor(row):
         cat = row["categoria"]
         return fatores_setor.get(cat, padroes.get(cat, 1.1))
         
-    df["Fator_Seguranca"] = df.apply(obter_fator_setor, axis=1)
+    df_calc["Fator_Seguranca"] = df_calc.apply(obter_fator_setor, axis=1)
     
-    # 1. Determinar o mês/ano de projeção (mês anterior ao ciclo de referência selecionado)
-    if mes_c == 1:
-        ano_anterior = ano_c - 1
-        mes_anterior = 12
-    else:
-        ano_anterior = ano_c
-        mes_anterior = mes_c - 1
-        
-    # Definir os limites temporais do mês anterior para o cálculo
-    t_start = datetime.datetime(ano_anterior, mes_anterior, 1)
-    t_end = datetime.datetime(ano_c, mes_c, 1)
+    # Divergência/Consumo total acumulado das 3 últimas semanas de inventário
+    df_calc["divergencia_3sem"] = df_calc["consumo_s3"] + df_calc["consumo_s2"] + df_calc["consumo_s1"]
     
-    metodo = st.session_state.get("metodo_consumo", "movimentacoes")
+    # Em caso de produtos novos sem 3 inventários, usamos o ritmo diário calculado
+    mask_fallback = df_calc["divergencia_3sem"] == 0
+    df_calc.loc[mask_fallback, "divergencia_3sem"] = (df_calc.loc[mask_fallback, "consumo_diario"] * 21.0).astype(int)
     
-    from utils.consumption import obter_movimentacoes_processadas, calcular_consumo_intervalo
-    try:
-        with get_conn() as conn:
-            movs = obter_movimentacoes_processadas(conn)
-    except Exception:
-        movs = pd.DataFrame()
-        
-    cons_dict = {}
-    if not movs.empty:
-        for _, row in df.iterrows():
-            p_id = row['id']
-            prod_movs = movs[movs['id_produto'] == p_id]
-            consumo = calcular_consumo_intervalo(prod_movs, t_start, t_end, metodo)
-            
-            # Se der 0 e não houver nenhuma movimentação anterior no intervalo, 
-            # fazemos um fallback para o histórico total
-            if consumo == 0:
-                t_init = datetime.datetime(1970, 1, 1)
-                t_now = datetime.datetime.now()
-                consumo_fallback = calcular_consumo_intervalo(prod_movs, t_init, t_now, metodo)
-                if consumo_fallback > 0:
-                    consumo = consumo_fallback
-            cons_dict[p_id] = consumo
-            
-    # 3. Projetar consumo para o mês do ciclo
-    df['consumo_projetado'] = df['id'].map(cons_dict).fillna(0).astype(int)
-    df['consumo_diario'] = df['consumo_projetado'] / 30.0
+    # Projeção mensal (30 dias) baseada no ritmo das 3 semanas de inventário
+    df_calc["ritmo_diario_3sem"] = df_calc["divergencia_3sem"] / 21.0
+    df_calc["consumo_projetado_mes"] = np.ceil(df_calc["ritmo_diario_3sem"] * 30.0).astype(int)
     
-    # 4. Mínimo Ideal (Estoque de Segurança para cobrir o Lead Time)
-    minimo_calculado = np.ceil(df["consumo_diario"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int)
-    df["Minimo Ideal"] = np.maximum(df["estoque_minimo"], minimo_calculado)
+    # Mínimo Ideal (Estoque de Segurança para cobrir Lead Time + Fator Setor)
+    minimo_calculado = np.ceil(df_calc["ritmo_diario_3sem"] * df_calc["lead_time"] * df_calc["Fator_Seguranca"]).astype(int)
+    df_calc["Minimo Ideal"] = np.maximum(df_calc["estoque_minimo"], minimo_calculado)
     
-    # 5. Sugestão de Compra para o ciclo: Cobrir o consumo projetado do mês seguinte + Estoque de Segurança
-    df["Sugestão Compra"] = (df["consumo_projetado"] + df["Minimo Ideal"] - df["saldo_atual"]).clip(lower=0)
-    df["Custo Estimado (R$)"] = df["Sugestão Compra"] * df["valor_unitario"]
+    # Sugestão de Compra para o ciclo: Projetado do Mês + Estoque de Segurança - Saldo Físico Atual
+    df_calc["Sugestão Compra"] = (df_calc["consumo_projetado_mes"] + df_calc["Minimo Ideal"] - df_calc["saldo_atual"]).clip(lower=0)
+    df_calc["Custo Estimado (R$)"] = df_calc["Sugestão Compra"] * df_calc["valor_unitario"]
     
-    # Filtrar apenas produtos que necessitam de compras para este ciclo
-    df_compras_ciclo = df[df["Sugestão Compra"] > 0].copy()
+    df_compras_ciclo = df_calc[df_calc["Sugestão Compra"] > 0].copy()
     
     if not df_compras_ciclo.empty:
-        # Valuation do pedido do ciclo
         total_custo_ciclo = df_compras_ciclo["Custo Estimado (R$)"].sum()
         total_itens_comprar = df_compras_ciclo["Sugestão Compra"].sum()
         
         c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-        c_kpi1.metric("📦 Total de Insumos do Pedido", f"{len(df_compras_ciclo)} itens")
-        c_kpi2.metric("🔢 Quantidade Total de Unidades", f"{int(total_itens_comprar)} un")
-        c_kpi3.metric("💰 Custo Estimado do Pedido", f"R$ {total_custo_ciclo:,.2f}")
+        c_kpi1.metric("📦 Insumos a Solicitar", f"{len(df_compras_ciclo)} itens")
+        c_kpi2.metric("🔢 Qtd. Total de Unidades", f"{int(total_itens_comprar)} un")
+        c_kpi3.metric("💰 Orçamento Estimado", f"R$ {total_custo_ciclo:,.2f}")
         
         st.write("---")
-        st.markdown("**📋 Insumos a serem solicitados nesta janela:**")
+        st.markdown("**📋 Demonstrativo de Solicitação de Compras (Base: 3 Últimos Inventários):**")
         
-        df_display = df_compras_ciclo[["categoria", "nome", "saldo_atual", "Minimo Ideal", "Sugestão Compra", "valor_unitario", "Custo Estimado (R$)"]].rename(
+        df_display = df_compras_ciclo[[
+            "categoria", "nome", "saldo_atual", 
+            "consumo_s3", "consumo_s2", "consumo_s1", "divergencia_3sem",
+            "Minimo Ideal", "Sugestão Compra", "valor_unitario", "Custo Estimado (R$)"
+        ]].rename(
             columns={
                 "categoria": "Setor",
-                "nome": "Produto",
+                "nome": "Produto / Insumo",
                 "saldo_atual": "Saldo Físico",
-                "Minimo Ideal": "Mínimo Ideal",
-                "Sugestão Compra": "Qtd. a Comprar",
+                "consumo_s3": "Inv. S-3 (3 sem atrás)",
+                "consumo_s2": "Inv. S-2 (2 sem atrás)",
+                "consumo_s1": "Inv. S-1 (Última sem)",
+                "divergencia_3sem": "Total 3 Inventários",
+                "Minimo Ideal": "Est. Segurança",
+                "Sugestão Compra": "Solicitação (un)",
                 "valor_unitario": "Preço Unitário",
-                "Custo Estimado (R$)": "Total Estimado"
+                "Custo Estimado (R$)": "Total Estimado (R$)"
             }
         )
         
         st.dataframe(
             df_display.style.format({
                 "Preço Unitário": "R$ {:.2f}",
-                "Total Estimado": "R$ {:.2f}"
+                "Total Estimado (R$)": "R$ {:.2f}"
             }),
             hide_index=True,
             use_container_width=True
         )
     else:
-        st.success("🎉 **Excelente!** Com base nos saldos atuais de prateleira e ritmos de consumo, não há nenhum insumo necessitando de compras para este ciclo.")
+        st.success("🎉 **Excelente!** Analisando os 3 últimos inventários e o saldo físico de prateleira, não há necessidade de nova solicitação de compras para este ciclo.")
 
     # --- 7. CONFIGURAÇÃO DE PARÂMETROS DO CRONOGRAMA ---
     st.divider()

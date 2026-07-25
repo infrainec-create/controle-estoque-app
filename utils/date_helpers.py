@@ -37,6 +37,13 @@ def obter_ultimo_dia_mes(dt):
         return datetime.date(dt.year, 12, 31)
     return datetime.date(dt.year, dt.month + 1, 1) - datetime.timedelta(days=1)
 
+def obter_ultimo_dia_util_mes(ano, mes):
+    """Retorna a data do último dia útil do mês especificado (excluindo sábados e domingos)."""
+    ultimo_dia = obter_ultimo_dia_mes(datetime.date(ano, mes, 1))
+    while ultimo_dia.weekday() >= 5:  # 5 = Sábado, 6 = Domingo
+        ultimo_dia -= datetime.timedelta(days=1)
+    return ultimo_dia
+
 def obter_primeiro_dia_util(ano, mes):
     """Retorna o primeiro dia útil do mês especificado (excluindo sábados e domingos)."""
     dt = datetime.date(ano, mes, 1)
@@ -56,30 +63,28 @@ def adicionar_dias_uteis(data_inicial, dias):
 
 def obter_cronograma_mes(ano, mes):
     """
-    Calcula as datas importantes para o ciclo de compras de um mês alvo específico
-    utilizando os parâmetros operacionais dinâmicos carregados do banco de dados.
+    Calcula as datas importantes para o ciclo de compras de um mês alvo específico:
+    - Solicitação: Último dia útil do mês anterior.
+    - Processamento interno de compras: 5 dias úteis.
+    - Entrega do fornecedor: 3 dias úteis pós-processamento de compras.
     """
     params = obter_parametros_cronograma()
-    d_inicio = params["dias_antes_inicio_sol"]
-    d_fim = params["dias_antes_fim_sol"]
-    d_analise = params["dias_uteis_analise"]
-    d_entrega = params["dias_uteis_entrega"]
+    d_analise = params.get("dias_uteis_analise", 5)
+    d_entrega = params.get("dias_uteis_entrega", 3)
 
-    # Determinar o mês anterior para a janela de solicitação
     if mes == 1:
         ano_anterior = ano - 1
         mes_anterior = 12
     else:
         ano_anterior = ano
         mes_anterior = mes - 1
-        
-    ultimo_dia_anterior = obter_ultimo_dia_mes(datetime.date(ano_anterior, mes_anterior, 1))
-    
-    # Janela de solicitação
-    data_inicio_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_inicio)
-    data_fim_solicitacao = ultimo_dia_anterior - datetime.timedelta(days=d_fim)
-    
-    # Verifica se há override específico para este ciclo
+
+    # 1. Envio da Solicitação ao Setor de Compras: Último Dia Útil do Mês Anterior
+    data_solicitacao = obter_ultimo_dia_util_mes(ano_anterior, mes_anterior)
+    data_inicio_solicitacao = data_solicitacao
+    data_fim_solicitacao = data_solicitacao
+
+    # Override de data de solicitação se configurado pelo admin
     key_override = f"crono_override_sol_{ano}_{mes}"
     try:
         with get_conn() as conn:
@@ -91,16 +96,14 @@ def obter_cronograma_mes(ano, mes):
                     data_fim_solicitacao = datetime.date.fromisoformat(parts[1])
     except Exception:
         pass
-    
-    # Início da análise: 1º dia útil do mês alvo
-    data_inicio_analise = obter_primeiro_dia_util(ano, mes)
-    
-    # Aprovação (Lead Time interno)
-    data_aprovacao = adicionar_dias_uteis(data_inicio_analise, d_analise)
-    
-    # Entrega (Lead Time fornecedor)
+
+    # 2. Atendimento do Setor de Compras (5 dias úteis a partir da solicitação)
+    data_inicio_analise = adicionar_dias_uteis(data_fim_solicitacao, 1)
+    data_aprovacao = adicionar_dias_uteis(data_fim_solicitacao, d_analise)
+
+    # 3. Entrega do Fornecedor (3 dias úteis pós-atendimento de compras)
     data_entrega = adicionar_dias_uteis(data_aprovacao, d_entrega)
-    
+
     return {
         "mes_alvo": mes,
         "ano_alvo": ano,

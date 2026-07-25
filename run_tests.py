@@ -190,20 +190,20 @@ class TestWMSRegression(unittest.TestCase):
         import datetime
         from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega
         
-        # Testar ciclo de Julho 2026
+        # Testar ciclo de Julho 2026 (Solicitação no último dia útil de Junho = 30/06/2026)
         crono = obter_cronograma_mes(2026, 7)
-        self.assertEqual(crono["inicio_analise"], datetime.date(2026, 7, 1))
-        self.assertEqual(crono["data_aprovacao"], datetime.date(2026, 7, 8))
-        self.assertEqual(crono["data_entrega"], datetime.date(2026, 7, 13))
+        self.assertEqual(crono["inicio_solicitacao"], datetime.date(2026, 6, 30))
+        self.assertEqual(crono["data_aprovacao"], datetime.date(2026, 7, 7))  # 5 dias úteis de compras
+        self.assertEqual(crono["data_entrega"], datetime.date(2026, 7, 10))    # 3 dias úteis de entrega fornecedor
         
         # Testar a previsão preditiva
         hoje = datetime.date(2026, 6, 15)
         previsao = calcular_previsao_entrega(hoje)
         self.assertEqual(previsao["mes_alvo"], 7)
-        self.assertEqual(previsao["data_entrega"], datetime.date(2026, 7, 13))
+        self.assertEqual(previsao["data_entrega"], datetime.date(2026, 7, 10))
         
-        # Testar que se hoje for após o prazo limite de solicitação do mês seguinte, vai para o mês subsequente (M+2)
-        hoje_tarde = datetime.date(2026, 6, 28)
+        # Testar que se hoje for após o prazo de solicitação do mês anterior (30/06), vai para o mês subsequente (M+2)
+        hoje_tarde = datetime.date(2026, 7, 1)
         previsao_tarde = calcular_previsao_entrega(hoje_tarde)
         self.assertEqual(previsao_tarde["mes_alvo"], 8)
 
