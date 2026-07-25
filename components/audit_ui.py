@@ -76,7 +76,7 @@ def render_audit_ui(df):
         else:
             st.success("🎉 Todos os insumos prioritários de hoje já foram auditados com sucesso!")
 
-    st.write("")
+    with st.container(border=True):
         st.markdown("##### ✏️ Registrar Nova Contagem Física")
         ops = {}
         for _, row in df.iterrows():
