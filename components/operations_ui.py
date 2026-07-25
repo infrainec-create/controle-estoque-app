@@ -4,28 +4,45 @@ from database.queries import registrar_log_auditoria, registrar_entrada_produto,
 from utils.backup import realizar_backup_local
 
 def render_operations_ui(df):
-    st.subheader("⬇️ Registrar Entrada ou 📤 Registrar Saída")
+    st.subheader("⚡ Lançamentos Operacionais de Estoque")
+    st.caption("Registro rápido de entradas (ressuprimento) e saídas (requisições/consumo) com validação dinâmica de saldo.")
+    
     if df.empty:
         st.info("Nenhum insumo disponível para lançamentos de entrada ou saída.")
         return
 
+    # ─── HEADER EXECUTIVO DE OPERAÇÕES ───
+    total_insumos = len(df)
+    itens_zerados = (df["saldo_atual"] <= 0).sum()
+    itens_criticos = ((df["saldo_atual"] > 0) & (df["saldo_atual"] < df["estoque_minimo"])).sum()
+    
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1.metric("📦 Insumos Ativos", f"{total_insumos} itens")
+    col_m2.metric("🚨 Em Ruptura (Zerados)", f"{itens_zerados} itens", delta_color="inverse")
+    col_m3.metric("⚠️ Em Estado Crítico", f"{itens_criticos} itens", delta_color="inverse")
+    col_m4.metric("👤 Operador Responsável", st.session_state.get("usuario_atual", "Operador"))
+
+    st.divider()
+
     col_e, col_s = st.columns(2)
     with col_e:
         with st.container(border=True):
-            st.subheader("⬇️ Registrar Entrada")
+            st.markdown("##### 📥 Registrar Entrada (Ressuprimento)")
             ops = dict(zip(df["nome"], df["id"]))
-            sel_e = st.selectbox("Produto", list(ops.keys()), key="e_p")
+            sel_e = st.selectbox("Selecione o Insumo:", list(ops.keys()), key="e_p")
             id_pe = ops[sel_e]
             p_atual = df.loc[df["id"]==id_pe].iloc[0]
-            int(p_atual["saldo_atual"])
+            s_atual_e = int(p_atual["saldo_atual"])
             pmp_antigo = float(p_atual["valor_unitario"])
             
+            st.info(f"Saldo Físico Atual no Sistema: **{s_atual_e} un.** (Preço Unit. Cadastrado: **R$ {pmp_antigo:,.2f}**)")
+            
             c1, c2 = st.columns([1, 1])
-            with c1: qe = st.number_input("Quantidade", min_value=1, key="e_q")
+            with c1: qe = st.number_input("Quantidade de Entrada", min_value=1, value=1, key="e_q")
             with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
-            obs_e = st.text_input("Nota/Fornecedor", key="e_obs")
+            obs_e = st.text_input("Nº Nota Fiscal / Fornecedor / Motivo", key="e_obs")
                 
-            if st.button("Confirmar Entrada", type="secondary"):
+            if st.button("Confirmar Entrada (Ressuprir)", type="primary", use_container_width=True):
                 sucesso_ent, msg_ent = registrar_entrada_produto(id_pe, qe, preco_compra, obs_e)
                 if sucesso_ent:
                     detalhes_log = f"Registrou entrada de {qe} un. do insumo '{sel_e}' (Preço Pago: R$ {preco_compra:.2f}/un; Total: R$ {qe * preco_compra:.2f})."
@@ -40,9 +57,9 @@ def render_operations_ui(df):
 
     with col_s:
         with st.container(border=True):
-            st.subheader("📤 Registrar Saída")
+            st.markdown("##### 📤 Registrar Saída (Baixa / Requisição)")
             ops = dict(zip(df["nome"], df["id"]))
-            sel = st.selectbox("Produto ", list(ops.keys()), key="s_p")
+            sel = st.selectbox("Selecione o Insumo:", list(ops.keys()), key="s_p")
             id_p = ops[sel]
             
             p_atual_s = df.loc[df["id"]==id_p].iloc[0]
@@ -50,8 +67,8 @@ def render_operations_ui(df):
             est_min_s = int(p_atual_s["estoque_minimo"])
             
             c1, c2 = st.columns([1, 2])
-            with c1: q = st.number_input("Quantidade", min_value=1, key="s_q")
-            with c2: obs_s = st.text_input("Observação/Destino", key="s_obs")
+            with c1: q = st.number_input("Qtd. Retirada", min_value=1, value=1, key="s_q")
+            with c2: obs_s = st.text_input("Destino / Setor Requisitante", key="s_obs")
             
             saldo_futuro = max_s - q
             bloquear_saida = q > max_s
@@ -62,11 +79,11 @@ def render_operations_ui(df):
             elif saldo_futuro == 0:
                 st.warning("⚠️ Atenção! Esta retirada irá ZERAR o saldo físico deste insumo em estoque!")
             elif saldo_futuro < est_min_s:
-                st.warning(f"⚠️ Alerta! Esta retirada deixará o saldo ({saldo_futuro} un) ABAIXO do estoque mínimo de segurança ({est_min_s} un)!")
+                st.warning(f"⚠️ Alerta! Esta retirada deixará o saldo ({saldo_futuro} un) ABAIXO do estoque mínimo ({est_min_s} un)!")
             else:
-                st.success(f"🟢 Saldo seguro após retirada: {saldo_futuro} un (Estoque Mínimo: {est_min_s} un).")
+                st.success(f"🟢 Saldo seguro após retirada: {saldo_futuro} un (Mínimo: {est_min_s} un).")
                 
-            if st.button("Confirmar Saída", type="primary", disabled=bloquear_saida):
+            if st.button("Confirmar Saída (Dar Baixa)", type="primary", disabled=bloquear_saida, use_container_width=True):
                 sucesso_saida, msg_saida = registrar_saida_produto(id_p, q, obs_s)
                 if sucesso_saida:
                     detalhes_log = f"Registrou saída de {q} un. do insumo '{sel}' (Observação: '{obs_s}'). Saldo restante estimado: {max_s - q} un."

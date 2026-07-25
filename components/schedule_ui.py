@@ -8,8 +8,8 @@ from database.queries import registrar_log_auditoria
 from utils.drive_sync import disparar_sincronizacao
 
 def render_schedule_ui(df):
-    st.subheader("📅 Cronograma Integrado de Compras & Fluxo Logístico")
-    st.caption("Acompanhamento das etapas do ciclo de abastecimento: da abertura da solicitação até a entrega física na prateleira.")
+    st.subheader("📅 Cronograma Integrado de Suprimentos & Prazos Logísticos")
+    st.caption("Acompanhamento das etapas do ciclo de abastecimento: solicitação, processamento e entrega física.")
     
     params = obter_parametros_cronograma()
     
@@ -19,13 +19,30 @@ def render_schedule_ui(df):
 
     # --- 1. SELEÇÃO DE MÊS DE REFERÊNCIA ---
     hoje = datetime.date.today()
+    crono_hoje = calcular_previsao_entrega()
     
-    # Determinar meses disponíveis para consulta (mês atual, próximo e subsequente)
+    # ─── HEADER EXECUTIVO DE CRONOGRAMA ───
+    st.markdown(f"""
+        <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.06) 0%, rgba(59, 130, 246, 0.03) 100%); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 14px; padding: 16px 20px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div>
+                    <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #8b5cf6; letter-spacing: 1px;">🚚 Status do Ciclo Atual ({crono_hoje['nome_mes']})</span>
+                    <h3 style="margin: 2px 0 0 0; font-size: 1.3rem; font-weight: 800;">{crono_hoje['status_fase']}</h3>
+                </div>
+                <div style="text-align: right;">
+                    <span style="font-size: 0.75rem; color: gray; font-weight: 600;">Data Prevista de Entrega</span>
+                    <div style="font-size: 1.4rem; font-weight: 800; color: #3b82f6;">{crono_hoje['data_entrega'].strftime('%d/%m/%Y')}</div>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Determinar meses disponíveis para consulta
     opcoes_meses = []
     mes_atual = hoje.month
     ano_atual = hoje.year
     
-    for i in range(-1, 3):  # Mês anterior, Atual, Próximo, Subsequente
+    for i in range(-1, 3):
         m = mes_atual + i
         a = ano_atual
         if m < 1:
@@ -52,22 +69,19 @@ def render_schedule_ui(df):
     c_sel1, c_sel2 = st.columns([2, 1])
     with c_sel1:
         mes_sel = st.selectbox(
-            "📅 Selecione o Mês de Referência do Cronograma:",
+            "📅 Selecione o Mês do Ciclo:",
             opcoes_meses,
-            index=2,  # Pré-seleciona o Próximo Ciclo (geralmente onde estão as ações de planejamento)
+            index=2,
             format_func=formatar_opcao
         )
     
-    # Obter cronograma do mês selecionado
     ano_c, mes_c = mes_sel
     crono = obter_cronograma_mes(ano_c, mes_c)
     
-    # --- 2. CÁLCULO DOS STATUS DAS ETAPAS ---
     status_sol = ""
     status_proc = ""
     status_ent = ""
     
-    # Cores/Estilos de badges
     style_active = "background-color: rgba(59, 130, 246, 0.15); color: #3b82f6; border: 1px solid #3b82f6; font-weight: 600; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; display: inline-block; margin-top: 5px;"
     style_completed = "background-color: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981; font-weight: 600; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; display: inline-block; margin-top: 5px;"
     style_pending = "background-color: rgba(148, 163, 184, 0.15); color: #64748b; border: 1px solid #94a3b8; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; display: inline-block; margin-top: 5px;"
@@ -77,7 +91,6 @@ def render_schedule_ui(df):
     st_proc_style = style_pending
     st_ent_style = style_pending
     
-    # Fase 1: Solicitação
     if hoje < crono["inicio_solicitacao"]:
         status_sol = "Aguardando Abertura"
         st_sol_style = style_pending
@@ -88,7 +101,6 @@ def render_schedule_ui(df):
         status_sol = "Janela Finalizada"
         st_sol_style = style_completed
         
-    # Fase 2: Processamento Interno
     if hoje < crono["inicio_analise"]:
         status_proc = "Aguardando Prazo"
         st_proc_style = style_pending

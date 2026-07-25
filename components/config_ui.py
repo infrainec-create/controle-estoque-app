@@ -5,6 +5,27 @@ from database.queries import cadastrar_produto, editar_produto, deletar_produto,
 from utils.drive_sync import disparar_sincronizacao
 
 def render_config_ui(df):
+    st.subheader("⚙️ Configurações & Governança do WMS 5.0")
+    st.caption("Gerenciamento do catálogo de insumos, permissões de operadores, margens por setor e integração em nuvem.")
+    
+    # ─── HEADER EXECUTIVO DE GOVERNANÇA ───
+    with get_conn() as conn:
+        cnt_usrs = conn.execute("SELECT COUNT(*), SUM(CASE WHEN aprovado = 0 THEN 1 ELSE 0 END) FROM usuarios").fetchone()
+        tot_usrs = cnt_usrs[0] if cnt_usrs else 0
+        pend_usrs = cnt_usrs[1] if cnt_usrs and cnt_usrs[1] is not None else 0
+        row_sync = conn.execute("SELECT mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
+    
+    status_nuvem = row_sync[0] if row_sync else "Nuvem Operacional"
+    ts_nuvem = row_sync[1] if row_sync else "Recente"
+    
+    cfg_col1, cfg_col2, cfg_col3, cfg_col4 = st.columns(4)
+    cfg_col1.metric("📦 Catálogo de Insumos", f"{len(df)} cadastrados")
+    cfg_col2.metric("👥 Operadores no Sistema", f"{tot_usrs} usuários")
+    cfg_col3.metric("⏳ Solicitações Pendentes", f"{pend_usrs} pendentes", delta_color="inverse" if pend_usrs > 0 else "normal")
+    cfg_col4.metric("☁️ Status da Nuvem", "Conectado", f"Última sync: {ts_nuvem}")
+
+    st.divider()
+
     st.markdown("### 👑 Painel de Aprovações de Novos Operadores")
     with get_conn() as conn:
         pendentes = pd.read_sql("SELECT usuario, pergunta_seguranca FROM usuarios WHERE aprovado = 0", conn)
