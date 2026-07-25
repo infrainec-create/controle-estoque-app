@@ -238,9 +238,15 @@ def render_dashboard_ui(df):
         return ''
 
     def format_tendencia(t):
-        if pd.isna(t) or t == 0: return "➡️ Estável"
-        if t > 0: return f"📈 +{t:.0f}%"
-        return f"📉 {t:.0f}%"
+        if pd.isna(t) or t is None:
+            return "➡️ Estável"
+        try:
+            val = float(t)
+            if val == 0: return "➡️ Estável"
+            if val > 0: return f"📈 +{val:.0f}%"
+            return f"📉 {val:.0f}%"
+        except (ValueError, TypeError):
+            return str(t) if str(t).strip() else "➡️ Estável"
 
     df_filtrado["criticidade"] = df_filtrado["criticidade"].fillna("Y").str.upper()
     df_filtrado["Valor_Total_Txt"] = df_filtrado["valor_total"].apply(lambda v: f"R$ {v:,.2f}")
