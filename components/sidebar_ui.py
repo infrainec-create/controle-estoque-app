@@ -3,17 +3,38 @@ import streamlit.components.v1 as components
 from database.connection import get_conn
 from database.queries import registrar_log_auditoria
 
-def render_sidebar_ui():
+def render_sidebar_ui(tabs_disponiveis=None):
     """
     Renderiza a barra lateral (sidebar) com informações do operador,
-    botão de logoff, cronômetro de inatividade da sessão e status da nuvem.
+    menu de navegação vertical pelas abas do sistema, botão de logoff,
+    cronômetro de inatividade da sessão e status da nuvem.
     """
+    aba_selecionada = None
     with st.sidebar:
+        st.markdown("<h2 style='text-align: center; margin-top: 5px; margin-bottom: 15px; font-weight: 800; font-size: 1.35rem;'>📦 WMS 5.0</h2>", unsafe_allow_html=True)
         st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
         st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
         
+        # Menu de Navegação Vertical (Abas no Painel Lateral)
+        if tabs_disponiveis:
+            st.markdown("---")
+            st.markdown("<p style='font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: gray; letter-spacing: 1px; margin-bottom: 8px;'>📋 Navegação Principal</p>", unsafe_allow_html=True)
+            
+            # Garantir que a aba ativa na sessão seja válida para o usuário atual
+            if "aba_ativa" not in st.session_state or st.session_state["aba_ativa"] not in tabs_disponiveis:
+                st.session_state["aba_ativa"] = tabs_disponiveis[0]
+                
+            aba_selecionada = st.radio(
+                "Menu Principal",
+                options=tabs_disponiveis,
+                key="aba_ativa",
+                label_visibility="collapsed"
+            )
+        
+        st.markdown("---")
+        
         # Botão de Logoff do Sistema
-        if st.button("🚪 Sair do Sistema (Logoff)", type="primary"):
+        if st.button("🚪 Sair do Sistema (Logoff)", type="primary", use_container_width=True):
             # Registrar log de auditoria antes de limpar a sessão
             registrar_log_auditoria(st.session_state["usuario_atual"], "Logoff no Sistema", "Operador encerrou a sessão manualmente.")
             
@@ -102,3 +123,5 @@ def render_sidebar_ui():
                         st.error(f"⚠️ {mensagem} ({timestamp_str})")
             except Exception:
                 pass
+
+    return aba_selecionada

@@ -94,7 +94,7 @@ st.markdown("""
     }
 
     /* ─────────────────────────────────────────────────────────────
-       NAV PILLS (TABS RE-DESIGN)
+       NAV PILLS (TABS RE-DESIGN) & VERTICAL SIDEBAR TABS
        ───────────────────────────────────────────────────────────── */
     /* Clean up so they do not squeeze when there are multiple tabs */
     div[data-baseweb="tab-list"] {
@@ -131,6 +131,76 @@ st.markdown("""
     
     div[data-baseweb="tab-highlight"] {
         display: none !important;
+    }
+
+    /* ─── ABAS VERTICAIS NO PAINEL LATERAL (SIDEBAR) ─── */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 6px !important;
+        width: 100% !important;
+    }
+    
+    /* Oculta a bolinha (bullet point) do radio */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label > div:first-child {
+        display: none !important;
+    }
+    
+    /* Card da Aba Vertical */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        display: flex !important;
+        align-items: center !important;
+        width: 100% !important;
+        padding: 12px 16px !important;
+        border-radius: 12px !important;
+        background-color: var(--secondary-background-color) !important;
+        border: 1px solid rgba(128, 128, 128, 0.12) !important;
+        cursor: pointer !important;
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        margin-bottom: 2px !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02) !important;
+    }
+    
+    /* Texto da Aba Vertical */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label span {
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        color: var(--text-color) !important;
+        opacity: 0.85;
+        margin: 0 !important;
+        line-height: 1.3 !important;
+    }
+    
+    /* Hover na Aba Vertical */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
+        transform: translateX(4px) !important;
+        border-color: rgba(0, 114, 255, 0.4) !important;
+        background-color: rgba(0, 114, 255, 0.06) !important;
+    }
+    
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover span {
+        color: var(--primary-color) !important;
+        opacity: 1 !important;
+    }
+    
+    /* Aba Ativa (Selecionada) na Vertical */
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked),
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label[aria-checked="true"] {
+        background: linear-gradient(135deg, #0072FF 0%, #00C6FF 100%) !important;
+        border: none !important;
+        box-shadow: 0 6px 18px rgba(0, 114, 255, 0.35) !important;
+        transform: translateX(6px) !important;
+    }
+    
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) span,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label[aria-checked="true"] p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label[aria-checked="true"] span {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        opacity: 1 !important;
     }
 
     /* ─────────────────────────────────────────────────────────────
@@ -334,42 +404,36 @@ else:
         except Exception:
             pass
 
-    # Renderiza a barra lateral modularizada (Sidebar, Logoff, Timer e Status)
-    render_sidebar_ui()
-
-    # Carrega DataFrames a partir das queries cacheadas
-    df = listar_produtos()
-    if not df.empty and "criticidade" not in df.columns:
-        df["criticidade"] = "Y"
-    mv = listar_movimentacoes()
-    
     # Abas estruturadas conforme perfil do Operador
     tabs_disponiveis = ["📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "📜 Histórico", "📅 Cronograma"]
     is_admin = st.session_state.get("perfil_atual") == "Administrador"
     
     if is_admin:
         tabs_disponiveis.extend(["🧠 IA Analista", "⚙️ Config"])
-        
-    abas = st.tabs(tabs_disponiveis)
-    
-    # Roteador visual delegando renderizações aos componentes
-    with abas[0]:
+
+    # Renderiza a barra lateral modularizada (Sidebar com Navegação Vertical, Logoff, Timer e Status)
+    aba_selecionada = render_sidebar_ui(tabs_disponiveis)
+
+    # Carrega DataFrames a partir das queries cacheadas
+    df = listar_produtos()
+    if not df.empty and "criticidade" not in df.columns:
+        df["criticidade"] = "Y"
+    mv = listar_movimentacoes()
+
+    # Roteador visual delegando renderizações aos componentes conforme a aba vertical ativa no painel lateral
+    if aba_selecionada == "📊 Painel":
         render_dashboard_ui(df)
-        
-    with abas[1]:
+    elif aba_selecionada == "⚡ Saídas/Entradas":
         render_operations_ui(df)
-        
-    with abas[2]:
+    elif aba_selecionada == "📋 INVENTÁRIO":
         render_audit_ui(df)
-        
-    with abas[3]:
+    elif aba_selecionada == "📜 Histórico":
         render_history_ui(df, mv)
-        
-    with abas[4]:
+    elif aba_selecionada == "📅 Cronograma":
         render_schedule_ui(df)
-        
-    if is_admin:
-        with abas[5]:
-            render_ai_assistant_ui(df)
-        with abas[6]:
-            render_config_ui(df)
+    elif aba_selecionada == "🧠 IA Analista" and is_admin:
+        render_ai_assistant_ui(df)
+    elif aba_selecionada == "⚙️ Config" and is_admin:
+        render_config_ui(df)
+    else:
+        render_dashboard_ui(df)
