@@ -24,6 +24,7 @@ def cadastrar_produto(nome, estoque_minimo, valor_unitario, categoria, lead_time
                 "INSERT INTO produtos (nome, saldo_atual, estoque_minimo, valor_unitario, categoria, lead_time, criticidade) VALUES (?, 0, ?, ?, ?, ?, ?)", 
                 (nome, estoque_minimo, valor_unitario, categoria, lead_time, criticidade)
             )
+        st.cache_data.clear()
         return True, "Sucesso"
     except Exception as e: 
         return False, str(e)
@@ -36,6 +37,7 @@ def editar_produto(id_p, nome, min_e, valor, cat, lead, criticidade='Y'):
                 "UPDATE produtos SET nome=?, estoque_minimo=?, valor_unitario=?, categoria=?, lead_time=?, criticidade=? WHERE id=?", 
                 (nome, min_e, valor, cat, lead, criticidade, id_p)
             )
+        st.cache_data.clear()
         return True, "Sucesso"
     except Exception as e:
         return False, str(e)
@@ -46,6 +48,7 @@ def deletar_produto(id_produto):
         with get_conn() as conn:
             conn.execute("DELETE FROM movimentacoes WHERE id_produto = ?", (id_produto,))
             conn.execute("DELETE FROM produtos WHERE id = ?", (id_produto,))
+        st.cache_data.clear()
         return True, "Sucesso"
     except Exception as e:
         return False, str(e)
@@ -72,6 +75,7 @@ def registrar_entrada_produto(id_produto, quantidade, preco_unitario, observacao
                 "INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Entrada', ?, ?, ?)",
                 (id_produto, data, quantidade, novo_saldo, obs_completa)
             )
+        st.cache_data.clear()
         return True, "Sucesso"
     except Exception as e:
         return False, str(e)
@@ -100,6 +104,7 @@ def registrar_saida_produto(id_produto, quantidade, observacao=""):
                 "INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Saída', ?, ?, ?)",
                 (id_produto, data, -quantidade, novo_saldo, obs_final)
             )
+        st.cache_data.clear()
         return True, "Sucesso"
     except Exception as e:
         return False, str(e)

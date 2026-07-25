@@ -237,10 +237,31 @@ def render_dashboard_ui(df):
         if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
         return ''
 
+    def format_tendencia(t):
+        if pd.isna(t) or t == 0: return "➡️ Estável"
+        if t > 0: return f"📈 +{t:.0f}%"
+        return f"📉 {t:.0f}%"
+
     df_filtrado["criticidade"] = df_filtrado["criticidade"].fillna("Y").str.upper()
     df_filtrado["Valor_Total_Txt"] = df_filtrado["valor_total"].apply(lambda v: f"R$ {v:,.2f}")
-    display_df = df_filtrado[['Status', 'categoria', 'nome', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 'Runway_Txt', 'Valor_Total_Txt', 'Sugestão Compra', 'Previsão de Entrega']].rename(
-        columns={'categoria': 'Setor', 'nome': 'Produto / Insumo', 'criticidade': 'Crit.', 'saldo_atual': 'Saldo Físico', 'Ponto_Pedido': 'Ponto Pedido', 'Runway_Txt': 'Cobertura (Runway)', 'Valor_Total_Txt': 'Valuation (R$)', 'Sugestão Compra': 'Sugestão Compra (un)', 'Previsão de Entrega': 'Previsão Entrega'})
+    df_filtrado["Tendência"] = df_filtrado["tendencia"].apply(format_tendencia)
+    
+    display_df = df_filtrado[[
+        'Status', 'categoria', 'nome', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 
+        'Runway_Txt', 'Tendência', 'Valor_Total_Txt', 'Sugestão Compra', 'Previsão de Entrega'
+    ]].rename(
+        columns={
+            'categoria': 'Setor', 
+            'nome': 'Produto / Insumo', 
+            'criticidade': 'Crit.', 
+            'saldo_atual': 'Saldo Físico', 
+            'Ponto_Pedido': 'Ponto Pedido', 
+            'Runway_Txt': 'Cobertura (Runway)', 
+            'Valor_Total_Txt': 'Valuation (R$)', 
+            'Sugestão Compra': 'Sugestão Compra (un)', 
+            'Previsão de Entrega': 'Previsão Entrega'
+        }
+    )
     st.dataframe(display_df.style.map(destacar_status, subset=['Status']), hide_index=True, width='stretch')
 
     # ─── 3. CONTAINER SANFONADO DE ANÁLISES GRÁFICAS ───
