@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
-from utils.consumption import processar_consumo_produtos
+from utils.consumption import processar_consumo_produtos, calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
     layout_update = dict(
@@ -14,6 +14,7 @@ def apply_premium_chart_theme(fig, is_dual_axis=False):
         font=dict(family="Source Sans Pro, Inter, sans-serif"),
         xaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
         yaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
+        margin=dict(l=20, r=20, t=35, b=20),
     )
     if is_dual_axis:
         layout_update["yaxis2"] = dict(
@@ -66,7 +67,19 @@ def render_dashboard_ui(df):
         
     df["Classe_ABC"] = df["id"].map(classes_map).fillna("Classe C")
 
-    # 3. Controles Logísticos Dinâmicos (Expander no topo do painel)
+    # ─────────────────────────────────────────────────────────────
+    # BARRA SUPERIOR: MODO DE VISUALIZAÇÃO & CONTROLES LOGÍSTICOS
+    # ─────────────────────────────────────────────────────────────
+    col_mode, col_blank = st.columns([2.8, 1])
+    with col_mode:
+        modo_visao = st.radio(
+            "👁️ Modo de Visualização do Painel:",
+            ["💼 Visão Executiva (Financeira)", "🔧 Visão Operacional (Compras & Almoxarifado)", "📊 Visão Completa"],
+            index=2,
+            horizontal=True,
+            help="Alterne entre focar em métricas financeiras/estratégicas ou na operação diária de reposição e estoque."
+        )
+
     with st.expander("⚙️ Parâmetros Logísticos Avançados (Janela de Consumo & Coberturas por Setor)", expanded=False):
         col_janela, col_metodo, col_margens = st.columns([1, 1.2, 1.8])
         with col_janela:
@@ -184,14 +197,162 @@ def render_dashboard_ui(df):
         </div>
     """, unsafe_allow_html=True)
 
+    # ─── CARDS DE METRICAS COM DELTAS & INDICADORES DE TENDENCIA (OPÇÃO 1) ───
     c1, c2, c3, c4 = st.columns([1,1,1,1])
-    c1.markdown(f'''<div class="metric-card" style="border-top: 4px solid #3b82f6;"><div class="card-title">💰 Capital Imobilizado</div><div class="card-value">R$ {valor_total_est:,.2f}</div></div>''', unsafe_allow_html=True)
+    
+    # Delta Capital Imobilizado
+    pct_giro = (valor_em_giro / valor_total_est * 100.0) if valor_total_est > 0 else 0.0
+    c1.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #3b82f6;">
+            <div class="card-title">💰 Capital Imobilizado</div>
+            <div class="card-value">R$ {valor_total_est:,.2f}</div>
+            <div style="font-size: 0.78rem; font-weight: 600; color: #10b859; margin-top: 6px; display: flex; align-items: center; gap: 4px;">
+                <span>▲ {pct_giro:.1f}%</span> em giro ativo ({janela_dias}d)
+            </div>
+        </div>
+    ''', unsafe_allow_html=True)
+    
+    # Delta Taxa de Ruptura
     ruptura_style = 'border-top: 4px solid #ef4444;' if taxa_ruptura > 10 else ('border-top: 4px solid #ea580c;' if taxa_ruptura > 0 else 'border-top: 4px solid #10b859;')
-    c2.markdown(f'''<div class="metric-card" style="{ruptura_style}"><div class="card-title">🚨 Taxa de Ruptura</div><div class="card-value">{taxa_ruptura:.1f}%</div></div>''', unsafe_allow_html=True)
-    c3.markdown(f'''<div class="metric-card" style="border-top: 4px solid #8b5cf6;"><div class="card-title">🔄 Giro de Estoque (An.)</div><div class="card-value">{giro_anualizado:.2f}x</div></div>''', unsafe_allow_html=True)
+    delta_ruptura_txt = f"🔴 {n_ruptura} itens zerados" if n_ruptura > 0 else "🟢 100% de disponibilidade"
+    delta_ruptura_color = "#ef4444" if n_ruptura > 0 else "#10b859"
+    c2.markdown(f'''
+        <div class="metric-card" style="{ruptura_style}">
+            <div class="card-title">🚨 Taxa de Ruptura</div>
+            <div class="card-value">{taxa_ruptura:.1f}%</div>
+            <div style="font-size: 0.78rem; font-weight: 600; color: {delta_ruptura_color}; margin-top: 6px;">
+                {delta_ruptura_txt} (Meta: 0%)
+            </div>
+        </div>
+    ''', unsafe_allow_html=True)
+    
+    # Delta Giro de Estoque
+    c3.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #8b5cf6;">
+            <div class="card-title">🔄 Giro de Estoque (An.)</div>
+            <div class="card-value">{giro_anualizado:.2f}x</div>
+            <div style="font-size: 0.78rem; font-weight: 600; color: #8b5cf6; margin-top: 6px;">
+                ⚡ Projeção Anualizada ({janela_dias}d)
+            </div>
+        </div>
+    ''', unsafe_allow_html=True)
+    
+    # Delta Cobertura DIO
     dio_txt = "Sem saídas" if dio_medio == 999.0 else f"{dio_medio:.1f} dias"
-    c4.markdown(f'''<div class="metric-card" style="border-top: 4px solid #ea580c;"><div class="card-title">📅 Cobertura Média (DIO)</div><div class="card-value">{dio_txt}</div></div>''', unsafe_allow_html=True)
+    c4.markdown(f'''
+        <div class="metric-card" style="border-top: 4px solid #ea580c;">
+            <div class="card-title">📅 Cobertura Média (DIO)</div>
+            <div class="card-value">{dio_txt}</div>
+            <div style="font-size: 0.78rem; font-weight: 600; color: #ea580c; margin-top: 6px;">
+                🎯 Cobertura Ideal: 15 a 30 dias
+            </div>
+        </div>
+    ''', unsafe_allow_html=True)
 
+    # ─── DESTAQUE GRÁFICO VISÍVEL SEM EXPANDER (OPÇÃO 1) ───
+    if modo_visao in ["💼 Visão Executiva (Financeira)", "📊 Visão Completa"]:
+        st.markdown("##### 📈 Destaques Visuais de Saúde & Valuation")
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            fig_health_setor = px.histogram(
+                df, x="categoria", color="Status", barmode="stack",
+                title="📦 Distribuição de Status por Setor",
+                color_discrete_map={
+                    '🔴 Ruptura': '#ef4444',
+                    '🔴 Crítico': '#dc2626',
+                    '🟠 Ponto de Pedido': '#f59e0b',
+                    '🟢 OK': '#10b859'
+                },
+                labels={"categoria": "Setor", "count": "Qtd Insumos"}
+            )
+            apply_premium_chart_theme(fig_health_setor)
+            st.plotly_chart(fig_health_setor, use_container_width=True)
+
+        with col_g2:
+            top5_df = df.sort_values(by="valor_total", ascending=False).head(5)
+            fig_top5 = px.bar(
+                top5_df, y="nome", x="valor_total", orientation="h",
+                title="💰 Top 5 Maior Valuation (R$)",
+                text_auto=".2f", color="valor_total", color_continuous_scale="Blues",
+                labels={"nome": "Produto / Insumo", "valor_total": "Valuation (R$)"}
+            )
+            fig_top5.update_layout(yaxis=dict(autorange="reversed"))
+            apply_premium_chart_theme(fig_top5)
+            st.plotly_chart(fig_top5, use_container_width=True)
+
+    # ─── TIMELINE PREDITIVA DE RUPTURA & ESTOQUE OBSOLETO (OPÇÃO 2) ───
+    if modo_visao in ["🔧 Visão Operacional (Compras & Almoxarifado)", "📊 Visão Completa"]:
+        st.divider()
+        df_pred = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)
+        
+        # Filtros de esgotamento preditivo
+        e_7 = df_pred[(df_pred["saldo_atual"] > 0) & (df_pred["runway_dias"] <= 7)]
+        e_14 = df_pred[(df_pred["saldo_atual"] > 0) & (df_pred["runway_dias"] > 7) & (df_pred["runway_dias"] <= 14)]
+        e_30 = df_pred[(df_pred["saldo_atual"] > 0) & (df_pred["runway_dias"] > 14) & (df_pred["runway_dias"] <= 30)]
+
+        st.markdown("### ⏱️ Timeline Preditiva de Ruptura (Horizonte de Esgotamento)")
+        t_col1, t_col2, t_col3 = st.columns(3)
+        with t_col1:
+            st.markdown(f"""
+                <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; padding: 14px 18px;">
+                    <div style="font-size: 0.75rem; font-weight: 700; color: #ef4444; text-transform: uppercase;">🚨 Esta Semana (≤ 7 dias)</div>
+                    <div style="font-size: 1.6rem; font-weight: 800; color: #ef4444; margin-top: 4px;">{len(e_7)} Insumos</div>
+                    <div style="font-size: 0.78rem; color: gray; margin-top: 4px;">Risco imediato de paralisação</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with t_col2:
+            st.markdown(f"""
+                <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 14px 18px;">
+                    <div style="font-size: 0.75rem; font-weight: 700; color: #f59e0b; text-transform: uppercase;">🟠 Próxima Semana (8 a 14 dias)</div>
+                    <div style="font-size: 1.6rem; font-weight: 800; color: #f59e0b; margin-top: 4px;">{len(e_14)} Insumos</div>
+                    <div style="font-size: 0.78rem; color: gray; margin-top: 4px;">Disparar pedido ao fornecedor</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with t_col3:
+            st.markdown(f"""
+                <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 14px 18px;">
+                    <div style="font-size: 0.75rem; font-weight: 700; color: #3b82f6; text-transform: uppercase;">🟡 Próximos 30 dias (15 a 30 dias)</div>
+                    <div style="font-size: 1.6rem; font-weight: 800; color: #3b82f6; margin-top: 4px;">{len(e_30)} Insumos</div>
+                    <div style="font-size: 0.78rem; color: gray; margin-top: 4px;">Planejamento mensal de estoque</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        if len(e_7) + len(e_14) + len(e_30) > 0:
+            with st.expander("📅 Detalhamento dos Insumos com Data Estimada de Ruptura", expanded=len(e_7) > 0):
+                df_timeline = pd.concat([e_7, e_14, e_30])[['nome', 'categoria', 'saldo_atual', 'runway_dias', 'data_esgotamento', 'status_cobertura']].rename(
+                    columns={
+                        'nome': 'Produto / Insumo', 
+                        'categoria': 'Setor', 
+                        'saldo_atual': 'Saldo Físico', 
+                        'runway_dias': 'Dias Restantes', 
+                        'data_esgotamento': 'Data Estimada Esgotamento', 
+                        'status_cobertura': 'Status Cobertura'
+                    }
+                )
+                st.dataframe(df_timeline, hide_index=True, use_container_width=True)
+
+        # Banner de Alerta de Estoque Obsoleto (Dead Stock)
+        info_posse = calcular_custo_posse_estoque(df)
+        if info_posse.get('valor_capital_parado', 0) > 0:
+            st.write("")
+            st.markdown(f"""
+                <div style="background: linear-gradient(135deg, rgba(239, 68, 68, 0.06) 0%, rgba(245, 158, 11, 0.04) 100%); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 14px; padding: 16px 20px; margin-top: 10px; margin-bottom: 10px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong style="color: #ef4444; font-size: 0.95rem;">🛑 Alerta de Estoque Obsoleto / Parado (Dead Stock)</strong>
+                            <p style="margin: 4px 0 0 0; font-size: 0.88rem; color: var(--text-color);">
+                                Existem <b>{info_posse['total_itens_parados']} insumos</b> sem nenhuma saída registrada nos últimos {janela_dias} dias, totalizando <b>R$ {info_posse['valor_capital_parado']:,.2f}</b> de capital imobilizado.
+                            </p>
+                        </div>
+                        <div style="background-color: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; padding: 6px 14px; text-align: right;">
+                            <span style="font-size: 0.70rem; text-transform: uppercase; color: gray; font-weight: 700;">Custo Carregamento Mensal</span>
+                            <div style="font-size: 1.1rem; font-weight: 800; color: #ef4444;">R$ {info_posse['custo_parado_mensal']:,.2f}/mês</div>
+                        </div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    # ─── CENTRAL DE AÇÕES RECOMENDADAS DO DIA ───
     with st.expander("🚨 Central de Ações Recomendadas do Dia", expanded=(n_ruptura + n_critico > 0)):
         ac_c1, ac_c2, ac_c3 = st.columns(3)
         with ac_c1:
@@ -210,7 +371,7 @@ def render_dashboard_ui(df):
 
     st.divider()
 
-    # ─── 2. TABELA ÚNICA CONSOLIDADA (ESTOQUE & SUPRIMENTOS) ───
+    # ─── 2. TABELA ÚNICA CONSOLIDADA (FILTROS AVANÇADOS ABC/XYZ - OPÇÃO 4) ───
     st.subheader("📋 Posição Consolidada de Estoque & Suprimentos")
     if "filtro_status_pill" not in st.session_state: st.session_state["filtro_status_pill"] = "Todos"
     f_pills = st.columns(5)
@@ -220,16 +381,27 @@ def render_dashboard_ui(df):
     if f_pills[3].button(f"🟠 Ponto Pedido ({n_ponto_ped})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟠 Ponto de Pedido" else "secondary"): st.session_state["filtro_status_pill"] = "🟠 Ponto de Pedido"; st.rerun()
     if f_pills[4].button(f"🟢 OK ({n_ok})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟢 OK" else "secondary"): st.session_state["filtro_status_pill"] = "🟢 OK"; st.rerun()
 
-    cp1, cp2, cp3 = st.columns([1.5, 1.5, 1])
-    with cp1: setor_sel = st.selectbox("⚡ Filtrar por Setor:", ["Todos"] + list(df["categoria"].unique()))
-    with cp2: busca_nome = st.text_input("🔍 Busca por Insumo:")
-    with cp3: apenas_compras_chk = st.checkbox("🛒 Apenas Compras Pendentes", value=False)
+    cp1, cp2, cp3, cp4, cp5 = st.columns([1.2, 1.1, 1.1, 1.4, 1.2])
+    with cp1: setor_sel = st.selectbox("⚡ Setor:", ["Todos"] + list(df["categoria"].unique()))
+    with cp2: abc_sel = st.selectbox("🏆 Curva ABC:", ["Todas", "Classe A", "Classe B", "Classe C"])
+    with cp3: xyz_sel = st.selectbox("🔍 Criticidade XYZ:", ["Todas", "Z (Vital)", "Y (Média)", "X (Baixa)"])
+    with cp4: busca_nome = st.text_input("🔍 Busca por Insumo:")
+    with cp5: apenas_compras_chk = st.checkbox("🛒 Apenas Compras", value=False)
 
     df_filtrado = df.copy()
-    if st.session_state["filtro_status_pill"] != "Todos": df_filtrado = df_filtrado[df_filtrado["Status"] == st.session_state["filtro_status_pill"]]
-    if setor_sel != "Todos": df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
-    if busca_nome.strip(): df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
-    if apenas_compras_chk: df_filtrado = df_filtrado[df_filtrado["Sugestão Compra"] > 0]
+    if st.session_state["filtro_status_pill"] != "Todos": 
+        df_filtrado = df_filtrado[df_filtrado["Status"] == st.session_state["filtro_status_pill"]]
+    if setor_sel != "Todos": 
+        df_filtrado = df_filtrado[df_filtrado["categoria"] == setor_sel]
+    if abc_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["Classe_ABC"] == abc_sel]
+    if xyz_sel != "Todas":
+        target_c = "Z" if "Z" in xyz_sel else ("X" if "X" in xyz_sel else "Y")
+        df_filtrado = df_filtrado[df_filtrado["criticidade"].fillna("Y").str.upper() == target_c]
+    if busca_nome.strip(): 
+        df_filtrado = df_filtrado[df_filtrado["nome"].str.contains(busca_nome, case=False)]
+    if apenas_compras_chk: 
+        df_filtrado = df_filtrado[df_filtrado["Sugestão Compra"] > 0]
 
     def destacar_status(val):
         if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
@@ -253,12 +425,13 @@ def render_dashboard_ui(df):
     df_filtrado["Tendência"] = df_filtrado["tendencia"].apply(format_tendencia)
     
     display_df = df_filtrado[[
-        'Status', 'categoria', 'nome', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 
+        'Status', 'categoria', 'nome', 'Classe_ABC', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 
         'Runway_Txt', 'Tendência', 'Valor_Total_Txt', 'Sugestão Compra', 'Previsão de Entrega'
     ]].rename(
         columns={
             'categoria': 'Setor', 
             'nome': 'Produto / Insumo', 
+            'Classe_ABC': 'ABC',
             'criticidade': 'Crit.', 
             'saldo_atual': 'Saldo Físico', 
             'Ponto_Pedido': 'Ponto Pedido', 
@@ -270,7 +443,7 @@ def render_dashboard_ui(df):
     )
     st.dataframe(display_df.style.map(destacar_status, subset=['Status']), hide_index=True, width='stretch')
 
-    # ─── 3. CONTAINER SANFONADO DE ANÁLISES GRÁFICAS ───
+    # ─── 3. CONTAINER SANFONADO DE ANÁLISES GRÁFICAS COMPLETA ───
     st.divider()
     with st.expander("📊 Análises Gráficas, Curva ABC/XYZ & Previsão Preditiva", expanded=False):
         g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🔍 Matriz ABC-XYZ (Criticidade)", "🎯 Matriz de Risco & Lead Time", "🔮 Previsão Preditiva & Posse"])
@@ -287,7 +460,7 @@ def render_dashboard_ui(df):
                 fig_pie = px.pie(valor_setor, values="Valor Total", names="Setor", hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
                 apply_premium_chart_theme(fig_pie); st.plotly_chart(fig_pie, use_container_width=True)
         with g_tabs[1]:
-            st.markdown("##### 🏆 Análise Parede Curva ABC")
+            st.markdown("##### 🏆 Análise Pareto Curva ABC")
             df_abc_tab = df.sort_values(by="valor_total", ascending=False).copy()
             total_valor_tab = df_abc_tab["valor_total"].sum()
             if total_valor_tab > 0:
@@ -313,14 +486,14 @@ def render_dashboard_ui(df):
         with g_tabs[4]:
             st.markdown("##### 🔮 Previsão Preditiva")
             from utils.consumption import calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
-            df_pred = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)
-            info_posse = calcular_custo_posse_estoque(df_pred)
+            df_pred_tab = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)
+            info_posse_tab = calcular_custo_posse_estoque(df_pred_tab)
             c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-            c_p1.metric("💰 Valuation", f"R$ {info_posse.get('valuation_total', 0):,.2f}")
-            c_p2.metric("📦 Custo Posse", f"R$ {info_posse.get('custo_posse_mensal', 0):,.2f}")
-            c_p3.metric("🛑 Capital Parado", f"R$ {info_posse.get('valor_capital_parado', 0):,.2f}")
-            c_p4.metric("🔮 Prev. 30d", f"{df_pred['prev_30d'].sum():,.0f} un.")
-            st.dataframe(df_pred.head(), hide_index=True, use_container_width=True)
+            c_p1.metric("💰 Valuation", f"R$ {info_posse_tab.get('valuation_total', 0):,.2f}")
+            c_p2.metric("📦 Custo Posse", f"R$ {info_posse_tab.get('custo_posse_mensal', 0):,.2f}")
+            c_p3.metric("🛑 Capital Parado", f"R$ {info_posse_tab.get('valor_capital_parado', 0):,.2f}")
+            c_p4.metric("🔮 Prev. 30d", f"{df_pred_tab['prev_30d'].sum():,.0f} un.")
+            st.dataframe(df_pred_tab.head(), hide_index=True, use_container_width=True)
 
     # ─── EXPORTAÇÃO DO RELATÓRIO EXECUTIVO COMPLETO ───
     st.divider()
