@@ -5,7 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
+from database.queries import listar_movimentacoes
 from utils.consumption import processar_consumo_produtos, calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
+from utils.date_helpers import calcular_previsao_entrega
+from utils.reports import gerar_html_pdf_estoque
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
     layout_update = dict(
@@ -162,7 +165,6 @@ def render_dashboard_ui(df):
     sub_pp = df["saldo_atual"] <= df["Ponto_Pedido"]
     df.loc[sub_pp, "Sugestão Compra"] = np.ceil(df.loc[sub_pp, "Ponto_Pedido"] * 1.5 - df.loc[sub_pp, "saldo_atual"]).astype(int).clip(lower=0)
     
-    from utils.date_helpers import calcular_previsao_entrega
     crono_entrega = calcular_previsao_entrega()
     data_entrega_str = crono_entrega["data_entrega"].strftime("%d/%m/%Y")
     df["Previsão de Entrega"] = df.apply(lambda r: data_entrega_str if r["Sugestão Compra"] > 0 else "Estoque OK", axis=1)
@@ -489,7 +491,6 @@ def render_dashboard_ui(df):
             apply_premium_chart_theme(fig_scatter); st.plotly_chart(fig_scatter, use_container_width=True)
         with g_tabs[4]:
             st.markdown("##### 🔮 Previsão Preditiva")
-            from utils.consumption import calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
             df_pred_tab = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)
             info_posse_tab = calcular_custo_posse_estoque(df_pred_tab)
             c_p1, c_p2, c_p3, c_p4 = st.columns(4)
@@ -501,8 +502,6 @@ def render_dashboard_ui(df):
 
     # ─── EXPORTAÇÃO DO RELATÓRIO EXECUTIVO COMPLETO ───
     st.divider()
-    from utils.reports import gerar_html_pdf_estoque
-    from database.queries import listar_movimentacoes
     html_report_data = gerar_html_pdf_estoque(df, listar_movimentacoes(), None, metodo=metodo_consumo, janela_dias=janela_dias)
     col_rep1, col_rep2 = st.columns([3, 1])
     with col_rep1:
