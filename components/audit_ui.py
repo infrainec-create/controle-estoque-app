@@ -1,11 +1,11 @@
 from datetime import datetime
-from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
 from utils.backup import realizar_backup_local
+from utils.consumption import obter_agora_fortaleza
 
 def render_audit_ui(df):
     st.subheader("📋 Auditoria de Inventário & Gestão de Divergências")
@@ -15,7 +15,7 @@ def render_audit_ui(df):
         st.info("Nenhum insumo disponível para auditoria física.")
         return
 
-    hoje = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y")
+    hoje = obter_agora_fortaleza().strftime("%d/%m/%Y")
     with get_conn() as conn:
         query_hoje = "SELECT id_produto FROM movimentacoes WHERE tipo = 'Contagem' AND data_hora LIKE ?"
         contados_hoje_df = pd.read_sql(query_hoje, conn, params=(f"{hoje}%",))
@@ -106,7 +106,7 @@ def render_audit_ui(df):
         if st.button("💾 Gravar Ajuste de Inventário", use_container_width=True, type="primary"):
             with get_conn() as conn:
                 conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
-                data = datetime.now(ZoneInfo("America/Fortaleza")).strftime("%d/%m/%Y %H:%M")
+                data = obter_agora_fortaleza().strftime("%d/%m/%Y %H:%M")
                 obs_inv = f"Inventário Semanal | Op: {st.session_state['usuario_atual']}"
                 conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, ?)", (id_pc, data, diff, f_cont, obs_inv))
             

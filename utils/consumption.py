@@ -1,7 +1,14 @@
 import pandas as pd
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 from database.connection import get_conn
+
+def obter_agora_fortaleza():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
+    except Exception:
+        tz_brt = timezone(timedelta(hours=-3))
+        return datetime.now(tz_brt).replace(tzinfo=None)
 
 def obter_movimentacoes_processadas(conn):
     """
@@ -142,7 +149,7 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
         # Fallback se der erro de conexao
         return df
         
-    agora = datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
+    agora = obter_agora_fortaleza()
     
     for idx, row in df.iterrows():
         prod_id = row['id']
@@ -152,7 +159,7 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
         t_limite = agora - timedelta(days=janela_dias)
         consumo_total_janela = calcular_consumo_intervalo(prod_movs, t_limite, agora, metodo)
         df.at[idx, 'total'] = float(consumo_total_janela)
-        df.at[idx, 'consumo_diario'] = float(consumo_total_janela) / janela_dias
+        df.at[idx, 'consumo_diario'] = float(consumo_total_janela) / (janela_dias if janela_dias > 0 else 1)
         
         # 2. Calcular consumos semanais S-1, S-2, S-3
         t0, t1, t2, t3 = obter_periodos_semanais(prod_movs, agora)
@@ -176,7 +183,6 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
             
     return df
 
-
 def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', janela_dias=30):
     """
     Realiza a projecao preditiva de demanda baseada em media movel ponderada
@@ -184,7 +190,7 @@ def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', jan
     Calcula tambem o Runway (dias ate esgotamento) e a data estimada de ruptura.
     """
     df = processar_consumo_produtos(df_produtos, metodo, janela_dias)
-    agora = datetime.now(ZoneInfo("America/Fortaleza")).replace(tzinfo=None)
+    agora = obter_agora_fortaleza()
     
     # Adicionar colunas preditivas
     df['prev_30d'] = 0.0
@@ -203,7 +209,6 @@ def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', jan
         saldo = row.get('saldo_atual', 0)
         
         # Consumo diario ponderado (S-1 com peso 50%, S-2 peso 30%, S-3 peso 20%)
-        # Se houver histórico de semanas, calcula média móvel ponderada
         s_total = s1 + s2 + s3
         if s_total > 0:
             consumo_semanal_ponderado = (s1 * 0.5) + (s2 * 0.3) + (s3 * 0.2)
@@ -249,7 +254,6 @@ def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', jan
                 df.at[idx, 'status_cobertura'] = '🔴 Estoque Zerado'
                 
     return df
-
 
 def calcular_custo_posse_estoque(df_produtos, taxa_anual_posse=0.15):
     """
