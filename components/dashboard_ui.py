@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
+from database.queries import listar_movimentacoes
 from utils.consumption import (
     processar_consumo_produtos, 
     calcular_previsao_demanda_preditiva, 
@@ -12,6 +13,7 @@ from utils.consumption import (
     calcular_matriz_kraljic,
     obter_historico_precos_insumos
 )
+from utils.date_helpers import calcular_previsao_entrega
 from utils.reports import gerar_html_pdf_estoque
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
