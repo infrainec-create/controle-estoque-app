@@ -1,5 +1,6 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "cSpell.language": "en,pt,pt-BR",
-    "cSpell.allowCompoundWords": true
+    "cSpell.allowCompoundWords": true,
+    "cSpell.import": ["./.cspell.json"]
 }
