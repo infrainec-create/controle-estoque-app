@@ -216,19 +216,19 @@ def render_schedule_ui(df):
         
     df_calc["Fator_Seguranca"] = df_calc.apply(obter_fator_setor, axis=1)
     
-    # Divergência/Consumo total acumulado das 3 últimas semanas de inventário
-    df_calc["divergencia_3sem"] = df_calc["consumo_s3"] + df_calc["consumo_s2"] + df_calc["consumo_s1"]
+    # Divergência/Consumo total acumulado das 4 últimas semanas de inventário
+    df_calc["divergencia_4sem"] = df_calc["consumo_s4"] + df_calc["consumo_s3"] + df_calc["consumo_s2"] + df_calc["consumo_s1"]
     
-    # Em caso de produtos novos sem 3 inventários, usamos o ritmo diário calculado
-    mask_fallback = df_calc["divergencia_3sem"] == 0
-    df_calc.loc[mask_fallback, "divergencia_3sem"] = (df_calc.loc[mask_fallback, "consumo_diario"] * 21.0).astype(int)
+    # Em caso de produtos novos sem 4 inventários, usamos o ritmo diário calculado
+    mask_fallback = df_calc["divergencia_4sem"] == 0
+    df_calc.loc[mask_fallback, "divergencia_4sem"] = (df_calc.loc[mask_fallback, "consumo_diario"] * 28.0).astype(int)
     
-    # Projeção mensal (30 dias) baseada no ritmo das 3 semanas de inventário
-    df_calc["ritmo_diario_3sem"] = df_calc["divergencia_3sem"] / 21.0
-    df_calc["consumo_projetado_mes"] = np.ceil(df_calc["ritmo_diario_3sem"] * 30.0).astype(int)
+    # Projeção mensal (30 dias) baseada no ritmo das 4 semanas de inventário
+    df_calc["ritmo_diario_4sem"] = df_calc["divergencia_4sem"] / 28.0
+    df_calc["consumo_projetado_mes"] = np.ceil(df_calc["ritmo_diario_4sem"] * 30.0).astype(int)
     
     # Mínimo Ideal (Estoque de Segurança para cobrir Lead Time + Fator Setor)
-    minimo_calculado = np.ceil(df_calc["ritmo_diario_3sem"] * df_calc["lead_time"] * df_calc["Fator_Seguranca"]).astype(int)
+    minimo_calculado = np.ceil(df_calc["ritmo_diario_4sem"] * df_calc["lead_time"] * df_calc["Fator_Seguranca"]).astype(int)
     df_calc["Minimo Ideal"] = np.maximum(df_calc["estoque_minimo"], minimo_calculado)
     
     # Sugestão de Compra para o ciclo: Projetado do Mês + Estoque de Segurança - Saldo Físico Atual
@@ -247,21 +247,22 @@ def render_schedule_ui(df):
         c_kpi3.metric("💰 Orçamento Estimado", f"R$ {total_custo_ciclo:,.2f}")
         
         st.write("---")
-        st.markdown("**📋 Demonstrativo de Solicitação de Compras (Base: 3 Últimos Inventários):**")
+        st.markdown("**📋 Demonstrativo de Solicitação de Compras (Base: 4 Últimos Inventários):**")
         
         df_display = df_compras_ciclo[[
             "categoria", "nome", "saldo_atual", 
-            "consumo_s3", "consumo_s2", "consumo_s1", "divergencia_3sem",
+            "consumo_s4", "consumo_s3", "consumo_s2", "consumo_s1", "divergencia_4sem",
             "Minimo Ideal", "Sugestão Compra", "valor_unitario", "Custo Estimado (R$)"
         ]].rename(
             columns={
                 "categoria": "Setor",
                 "nome": "Produto / Insumo",
                 "saldo_atual": "Saldo Físico",
-                "consumo_s3": "Inv. S-3 (3 sem atrás)",
-                "consumo_s2": "Inv. S-2 (2 sem atrás)",
-                "consumo_s1": "Inv. S-1 (Última sem)",
-                "divergencia_3sem": "Total 3 Inventários",
+                "consumo_s4": "Inv. S-4",
+                "consumo_s3": "Inv. S-3",
+                "consumo_s2": "Inv. S-2",
+                "consumo_s1": "Inv. S-1",
+                "divergencia_4sem": "Total 4 Inventários",
                 "Minimo Ideal": "Est. Segurança",
                 "Sugestão Compra": "Solicitação (un)",
                 "valor_unitario": "Preço Unitário",

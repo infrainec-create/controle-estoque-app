@@ -274,6 +274,7 @@ class TestWMSRegression(unittest.TestCase):
         self.assertIn('consumo_s1', df_res_inv.columns)
         self.assertIn('consumo_s2', df_res_inv.columns)
         self.assertIn('consumo_s3', df_res_inv.columns)
+        self.assertIn('consumo_s4', df_res_inv.columns)
         self.assertIn('tendencia', df_res_inv.columns)
         
         # Limpar

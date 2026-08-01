@@ -83,13 +83,13 @@ def calcular_consumo_intervalo(prod_movs, t_start, t_end, metodo):
 
 def obter_periodos_semanais(prod_movs, agora):
     """
-    Define 3 periodos semanais (semanas S-1, S-2, S-3) baseados nos inventarios (Contagem).
-    Retorna 4 timestamps (T0, T1, T2, T3) definindo as janelas:
+    Define 4 periodos semanais (semanas S-1, S-2, S-3, S-4) baseados nos inventarios (Contagem).
+    Retorna 5 timestamps (T0, T1, T2, T3, T4) definindo as janelas:
       - S-1: (T1, T0]
       - S-2: (T2, T1]
       - S-3: (T3, T2]
+      - S-4: (T4, T3]
     """
-    # Obter contagens do produto, ordenadas decrescentemente no tempo
     contagens = prod_movs[prod_movs['tipo'] == 'Contagem'].sort_values(by='dt', ascending=False)
     
     contagens_list = []
@@ -98,7 +98,6 @@ def obter_periodos_semanais(prod_movs, agora):
         curr_dt = row['dt']
         if pd.isna(curr_dt):
             continue
-        # Evitar contagens duplicadas no mesmo dia/hora (considera intervalo > 1 hora)
         if last_dt is None or (last_dt - curr_dt).total_seconds() > 3600:
             contagens_list.append(curr_dt)
             last_dt = curr_dt
@@ -106,30 +105,37 @@ def obter_periodos_semanais(prod_movs, agora):
     n_counts = len(contagens_list)
     t0 = agora
     
-    if n_counts >= 3:
-        # Se temos pelo menos 3 contagens no historico, usamos as contagens como marcos
+    if n_counts >= 4:
         t1 = contagens_list[0]
         t2 = contagens_list[1]
         t3 = contagens_list[2]
+        t4 = contagens_list[3]
+    elif n_counts == 3:
+        t1 = contagens_list[0]
+        t2 = contagens_list[1]
+        t3 = contagens_list[2]
+        t4 = t3 - timedelta(days=7)
     elif n_counts == 2:
         t1 = contagens_list[0]
         t2 = contagens_list[1]
         t3 = t2 - timedelta(days=7)
+        t4 = t2 - timedelta(days=14)
     elif n_counts == 1:
         t1 = contagens_list[0]
         t2 = t1 - timedelta(days=7)
         t3 = t1 - timedelta(days=14)
+        t4 = t1 - timedelta(days=21)
     else:
-        # Sem contagens: janelas calendarias puras de 7 dias
         t1 = t0 - timedelta(days=7)
         t2 = t0 - timedelta(days=14)
         t3 = t0 - timedelta(days=21)
+        t4 = t0 - timedelta(days=28)
         
-    return t0, t1, t2, t3
+    return t0, t1, t2, t3, t4
 
 def processar_consumo_produtos(df_produtos, metodo, janela_dias):
     """
-    Calcula consumo_diario, consumo_s1, consumo_s2, consumo_s3 e tendencia
+    Calcula consumo_diario, consumo_s1, consumo_s2, consumo_s3, consumo_s4, consumo_4inv e tendencia
     para todos os produtos com base no metodo selecionado.
     """
     df = df_produtos.copy()
@@ -139,6 +145,10 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
     df['consumo_s1'] = 0
     df['consumo_s2'] = 0
     df['consumo_s3'] = 0
+    df['consumo_s4'] = 0
+    df['consumo_4inv'] = 0
+    df['consumo_diario_4inv'] = 0.0
+    df['historico_4inv_txt'] = '0 | 0 | 0 | 0'
     df['tendencia'] = '➡️ Estável'
     df['total'] = 0.0  # Para compatibilidade com outras formulas de giro de estoque
     
@@ -161,16 +171,23 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
         df.at[idx, 'total'] = float(consumo_total_janela)
         df.at[idx, 'consumo_diario'] = float(consumo_total_janela) / (janela_dias if janela_dias > 0 else 1)
         
-        # 2. Calcular consumos semanais S-1, S-2, S-3
-        t0, t1, t2, t3 = obter_periodos_semanais(prod_movs, agora)
+        # 2. Calcular consumos das últimas 4 semanas de inventário (S-1, S-2, S-3, S-4)
+        t0, t1, t2, t3, t4 = obter_periodos_semanais(prod_movs, agora)
         
         s1 = calcular_consumo_intervalo(prod_movs, t1, t0, metodo)
         s2 = calcular_consumo_intervalo(prod_movs, t2, t1, metodo)
         s3 = calcular_consumo_intervalo(prod_movs, t3, t2, metodo)
+        s4 = calcular_consumo_intervalo(prod_movs, t4, t3, metodo)
         
         df.at[idx, 'consumo_s1'] = s1
         df.at[idx, 'consumo_s2'] = s2
         df.at[idx, 'consumo_s3'] = s3
+        df.at[idx, 'consumo_s4'] = s4
+        
+        tot_4inv = s1 + s2 + s3 + s4
+        df.at[idx, 'consumo_4inv'] = tot_4inv
+        df.at[idx, 'consumo_diario_4inv'] = float(tot_4inv) / 28.0
+        df.at[idx, 'historico_4inv_txt'] = f"{s1} | {s2} | {s3} | {s4}"
         
         # 3. Calcular tendencia baseada na diferenca entre a semana mais recente (s1) e a anterior (s2)
         diff = s1 - s2
@@ -185,8 +202,8 @@ def processar_consumo_produtos(df_produtos, metodo, janela_dias):
 
 def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', janela_dias=30):
     """
-    Realiza a projecao preditiva de demanda baseada em media movel ponderada
-    e tendencia das ultimas semanas para os proximos 30, 60 e 90 dias.
+    Realiza a projecao preditiva de demanda baseada nos 4 últimos consumos de inventário
+    para os proximos 30, 60 e 90 dias.
     Calcula tambem o Runway (dias ate esgotamento) e a data estimada de ruptura.
     """
     df = processar_consumo_produtos(df_produtos, metodo, janela_dias)
@@ -206,12 +223,13 @@ def calcular_previsao_demanda_preditiva(df_produtos, metodo='movimentacoes', jan
         s1 = row.get('consumo_s1', 0)
         s2 = row.get('consumo_s2', 0)
         s3 = row.get('consumo_s3', 0)
+        s4 = row.get('consumo_s4', 0)
         saldo = row.get('saldo_atual', 0)
         
-        # Consumo diario ponderado (S-1 com peso 50%, S-2 peso 30%, S-3 peso 20%)
-        s_total = s1 + s2 + s3
+        # Consumo diario ponderado (S-1: 40%, S-2: 30%, S-3: 20%, S-4: 10%)
+        s_total = s1 + s2 + s3 + s4
         if s_total > 0:
-            consumo_semanal_ponderado = (s1 * 0.5) + (s2 * 0.3) + (s3 * 0.2)
+            consumo_semanal_ponderado = (s1 * 0.40) + (s2 * 0.30) + (s3 * 0.20) + (s4 * 0.10)
             c_diario_ponderado = max(consumo_diario, consumo_semanal_ponderado / 7.0)
         else:
             c_diario_ponderado = consumo_diario

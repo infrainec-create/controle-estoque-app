@@ -119,14 +119,18 @@ def render_dashboard_ui(df):
     # 4. Cálculo de Consumo diário baseado na janela temporal e método selecionados
     df = processar_consumo_produtos(df, metodo_consumo, janela_dias)
     
-    # Cálculos Logísticos para Ponto de Pedido Automático e Estoque de Segurança
+    # ─── CÁLCULOS LOGÍSTICOS & SUGESTÃO DE COMPRA BASEADOS NOS 4 ÚLTIMOS INVENTÁRIOS ───
     def obter_fator_setor(row):
         cat = row["categoria"]
         return fatores_setor.get(cat, padroes.get(cat, 1.1))
         
     df["Fator_Seguranca"] = df.apply(obter_fator_setor, axis=1)
-    df["Estoque_Seguranca"] = np.maximum(df["estoque_minimo"], np.ceil(df["consumo_diario"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int))
-    df["Consumo_Lead_Time"] = np.ceil(df["consumo_diario"] * df["lead_time"]).astype(int)
+    
+    # Ritmo diário prioritário derivado dos 4 últimos consumos registrados nos inventários (S-1 a S-4)
+    df["ritmo_diario_4inv"] = np.where(df["consumo_4inv"] > 0, df["consumo_diario_4inv"], df["consumo_diario"])
+    
+    df["Estoque_Seguranca"] = np.maximum(df["estoque_minimo"], np.ceil(df["ritmo_diario_4inv"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int))
+    df["Consumo_Lead_Time"] = np.ceil(df["ritmo_diario_4inv"] * df["lead_time"]).astype(int)
     df["Ponto_Pedido"] = df["Consumo_Lead_Time"] + df["Estoque_Seguranca"]
     
     # 5. Runway e Status
@@ -159,11 +163,15 @@ def render_dashboard_ui(df):
     n_ok = (df["saldo_atual"] > df["Ponto_Pedido"]).sum()
     taxa_ruptura = (n_ruptura / total_itens * 100) if total_itens > 0 else 0.0
 
-    # ─── CÁLCULO DE SUGESTÃO DE COMPRA & PREVISÃO DE ENTREGA (UNIFICADO) ───
-    df["Minimo_Ideal"] = np.maximum(df["estoque_minimo"], np.ceil(df["consumo_diario"] * df["lead_time"] * df["Fator_Seguranca"]).astype(int))
+    # ─── SUGESTÃO DE COMPRA (PROJEÇÃO MENSAL DAS 4 SEMANAS DE INVENTÁRIO + ESTOQUE SEGURAÇA - SALDO ATUAL) ───
+    df["Minimo_Ideal"] = df["Estoque_Seguranca"]
     df["Sugestão Compra"] = 0
     sub_pp = df["saldo_atual"] <= df["Ponto_Pedido"]
-    df.loc[sub_pp, "Sugestão Compra"] = np.ceil(df.loc[sub_pp, "Ponto_Pedido"] * 1.5 - df.loc[sub_pp, "saldo_atual"]).astype(int).clip(lower=0)
+    
+    # Projeção de reposição: 30 dias de demanda (ritmo dos 4 últimos inventários) + estoque de segurança - saldo atual
+    df.loc[sub_pp, "Sugestão Compra"] = np.ceil(
+        df.loc[sub_pp, "ritmo_diario_4inv"] * 30.0 + df.loc[sub_pp, "Estoque_Seguranca"] - df.loc[sub_pp, "saldo_atual"]
+    ).astype(int).clip(lower=0)
     
     crono_entrega = calcular_previsao_entrega()
     data_entrega_str = crono_entrega["data_entrega"].strftime("%d/%m/%Y")
@@ -431,8 +439,9 @@ def render_dashboard_ui(df):
     df_filtrado["Tendência"] = df_filtrado["tendencia"].apply(format_tendencia)
     
     display_df = df_filtrado[[
-        'Status', 'categoria', 'nome', 'Classe_ABC', 'criticidade', 'saldo_atual', 'Ponto_Pedido', 
-        'Runway_Txt', 'Tendência', 'Valor_Total_Txt', 'Sugestão Compra', 'Previsão de Entrega'
+        'Status', 'categoria', 'nome', 'Classe_ABC', 'criticidade', 'saldo_atual', 
+        'historico_4inv_txt', 'Ponto_Pedido', 'Runway_Txt', 'Tendência', 
+        'Valor_Total_Txt', 'Sugestão Compra', 'Previsão de Entrega'
     ]].rename(
         columns={
             'categoria': 'Setor', 
@@ -440,6 +449,7 @@ def render_dashboard_ui(df):
             'Classe_ABC': 'ABC',
             'criticidade': 'Crit.', 
             'saldo_atual': 'Saldo Físico', 
+            'historico_4inv_txt': 'Últimos 4 Inv. (S1|S2|S3|S4)',
             'Ponto_Pedido': 'Ponto Pedido', 
             'Runway_Txt': 'Cobertura (Runway)', 
             'Valor_Total_Txt': 'Valuation (R$)', 
