@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria, registrar_entrada_produto, registrar_saida_produto, listar_movimentacoes
 from utils.backup import realizar_backup_local
@@ -45,8 +44,10 @@ def render_operations_ui(df):
                 st.info(f"Saldo Físico Atual no Sistema: **{s_atual_e} un.** (Preço Unit. Cadastrado: **R$ {pmp_antigo:,.2f}**)")
                 
                 c1, c2 = st.columns([1, 1])
-                with c1: qe = st.number_input("Quantidade de Entrada", min_value=1, value=1, key="e_q")
-                with c2: preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
+                with c1:
+                    qe = st.number_input("Quantidade de Entrada", min_value=1, value=1, key="e_q")
+                with c2:
+                    preco_compra = st.number_input("Preço Unit. de Compra (R$)", min_value=0.0, value=pmp_antigo, step=0.01, key="e_v")
                 obs_e = st.text_input("Nº Nota Fiscal / Fornecedor / Motivo", key="e_obs")
                     
                 if st.button("Confirmar Entrada (Ressuprir)", type="primary", use_container_width=True):
@@ -82,8 +83,10 @@ def render_operations_ui(df):
                 est_min_s = int(p_atual_s["estoque_minimo"])
                 
                 c1, c2 = st.columns([1, 2])
-                with c1: q = st.number_input("Qtd. Retirada", min_value=1, value=1, key="s_q")
-                with c2: obs_s = st.text_input("Destino / Setor Requisitante", key="s_obs")
+                with c1:
+                    q = st.number_input("Qtd. Retirada", min_value=1, value=1, key="s_q")
+                with c2:
+                    obs_s = st.text_input("Destino / Setor Requisitante", key="s_obs")
                 
                 saldo_futuro = max_s - q
                 bloquear_saida = q > max_s

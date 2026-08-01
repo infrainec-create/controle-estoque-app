@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -70,8 +70,10 @@ def render_dashboard_ui(df):
         
         def get_class(row):
             val = row["perc_acumulado"]
-            if val <= 80: return "Classe A"
-            if val <= 95: return "Classe B"
+            if val <= 80:
+                return "Classe A"
+            if val <= 95:
+                return "Classe B"
             return "Classe C"
         df_abc["Classe"] = df_abc.apply(get_class, axis=1)
         classes_map = dict(zip(df_abc["id"], df_abc["Classe"]))
@@ -145,9 +147,12 @@ def render_dashboard_ui(df):
     df.loc[mask, 'Runway'] = (df.loc[mask, 'saldo_atual'] / df.loc[mask, 'consumo_diario']).astype(int)
     
     def set_status(row):
-        if row['saldo_atual'] <= 0: return '🔴 Ruptura'
-        if row['saldo_atual'] < row['estoque_minimo']: return '🔴 Crítico'
-        if row['saldo_atual'] <= row['Ponto_Pedido']: return '🟠 Ponto de Pedido'
+        if row['saldo_atual'] <= 0:
+            return '🔴 Ruptura'
+        if row['saldo_atual'] < row['estoque_minimo']:
+            return '🔴 Crítico'
+        if row['saldo_atual'] <= row['Ponto_Pedido']:
+            return '🟠 Ponto de Pedido'
         return '🟢 OK'
         
     df['Status'] = df.apply(set_status, axis=1)
@@ -189,17 +194,22 @@ def render_dashboard_ui(df):
     try:
         with get_conn() as conn:
             cnt_row = conn.execute("SELECT COUNT(*), SUM(CASE WHEN quantidade = 0 THEN 1 ELSE 0 END) FROM movimentacoes WHERE tipo = 'Contagem'").fetchone()
-            if cnt_row and cnt_row[0] > 0: ira_percent = (cnt_row[1] / cnt_row[0]) * 100.0
-    except Exception: pass
+            if cnt_row and cnt_row[0] > 0:
+                ira_percent = (cnt_row[1] / cnt_row[0]) * 100.0
+    except Exception:
+        pass
     p2_acuracidade = ira_percent
     valor_total_est = df["valor_total"].sum()
     valor_em_giro = df[df["consumo_diario"] > 0]["valor_total"].sum()
     p3_eficiencia = (valor_em_giro / valor_total_est * 100.0) if valor_total_est > 0 else 100.0
     health_score = round((p1_atendimento * 0.40) + (p2_acuracidade * 0.30) + (p3_eficiencia * 0.30), 1)
     
-    if health_score >= 85: badge_health, color_health = "🟢 Excelente Saúde de Estoque", "#10b859"
-    elif health_score >= 70: badge_health, color_health = "🟡 Estado de Alerta Moderado", "#f59e0b"
-    else: badge_health, color_health = "🔴 Estado Crítico Requer Atenção", "#ef4444"
+    if health_score >= 85:
+        badge_health, color_health = "🟢 Excelente Saúde de Estoque", "#10b859"
+    elif health_score >= 70:
+        badge_health, color_health = "🟡 Estado de Alerta Moderado", "#f59e0b"
+    else:
+        badge_health, color_health = "🔴 Estado Crítico Requer Atenção", "#ef4444"
         
     st.markdown(f"""
         <div style="background: linear-gradient(135deg, rgba(0, 114, 255, 0.05) 0%, rgba(0, 198, 255, 0.02) 100%); border: 1px solid rgba(0, 114, 255, 0.18); border-radius: 16px; padding: 18px 24px; margin-bottom: 15px;">
@@ -377,14 +387,19 @@ def render_dashboard_ui(df):
         ac_c1, ac_c2, ac_c3 = st.columns(3)
         with ac_c1:
             st.markdown(f"**🛒 Pedidos Urgentes ({n_ruptura + n_critico + n_ponto_ped})**")
-            if n_ruptura + n_critico > 0: st.error(f"⚠️ **{n_ruptura} Ruptura** e **{n_critico} Críticos**.")
-            elif n_ponto_ped > 0: st.warning(f"🟠 **{n_ponto_ped}** no Ponto de Pedido.")
-            else: st.success("🟢 Tudo OK.")
+            if n_ruptura + n_critico > 0:
+                st.error(f"⚠️ **{n_ruptura} Ruptura** e **{n_critico} Críticos**.")
+            elif n_ponto_ped > 0:
+                st.warning(f"🟠 **{n_ponto_ped}** no Ponto de Pedido.")
+            else:
+                st.success("🟢 Tudo OK.")
         with ac_c2:
             st.markdown("**💎 Maior Valor em Risco**")
             df_risco = df[df["Status"].isin(["🔴 Ruptura", "🔴 Crítico", "🟠 Ponto de Pedido"])].sort_values(by="valor_total", ascending=False)
-            if not df_risco.empty: st.warning(f"**{df_risco.iloc[0]['nome']}**: R$ {df_risco.iloc[0]['valor_total']:,.2f}")
-            else: st.success("Nenhum item em risco.")
+            if not df_risco.empty:
+                st.warning(f"**{df_risco.iloc[0]['nome']}**: R$ {df_risco.iloc[0]['valor_total']:,.2f}")
+            else:
+                st.success("Nenhum item em risco.")
         with ac_c3:
             st.markdown("**📅 Cronograma de Suprimentos**")
             st.info(f"🚚 Próxima janela: **{data_entrega_str}**")
@@ -393,20 +408,36 @@ def render_dashboard_ui(df):
 
     # ─── 2. TABELA ÚNICA CONSOLIDADA (FILTROS AVANÇADOS ABC/XYZ - OPÇÃO 4) ───
     st.subheader("📋 Posição Consolidada de Estoque & Suprimentos")
-    if "filtro_status_pill" not in st.session_state: st.session_state["filtro_status_pill"] = "Todos"
+    if "filtro_status_pill" not in st.session_state:
+        st.session_state["filtro_status_pill"] = "Todos"
     f_pills = st.columns(5)
-    if f_pills[0].button(f"📊 Todos ({total_itens})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "Todos" else "secondary"): st.session_state["filtro_status_pill"] = "Todos"; st.rerun()
-    if f_pills[1].button(f"🔴 Ruptura ({n_ruptura})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Ruptura" else "secondary"): st.session_state["filtro_status_pill"] = "🔴 Ruptura"; st.rerun()
-    if f_pills[2].button(f"🔴 Crítico ({n_critico})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Crítico" else "secondary"): st.session_state["filtro_status_pill"] = "🔴 Crítico"; st.rerun()
-    if f_pills[3].button(f"🟠 Ponto Pedido ({n_ponto_ped})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟠 Ponto de Pedido" else "secondary"): st.session_state["filtro_status_pill"] = "🟠 Ponto de Pedido"; st.rerun()
-    if f_pills[4].button(f"🟢 OK ({n_ok})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟢 OK" else "secondary"): st.session_state["filtro_status_pill"] = "🟢 OK"; st.rerun()
+    if f_pills[0].button(f"📊 Todos ({total_itens})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "Todos" else "secondary"):
+        st.session_state["filtro_status_pill"] = "Todos"
+        st.rerun()
+    if f_pills[1].button(f"🔴 Ruptura ({n_ruptura})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Ruptura" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🔴 Ruptura"
+        st.rerun()
+    if f_pills[2].button(f"🔴 Crítico ({n_critico})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🔴 Crítico" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🔴 Crítico"
+        st.rerun()
+    if f_pills[3].button(f"🟠 Ponto Pedido ({n_ponto_ped})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟠 Ponto de Pedido" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🟠 Ponto de Pedido"
+        st.rerun()
+    if f_pills[4].button(f"🟢 OK ({n_ok})", use_container_width=True, type="primary" if st.session_state["filtro_status_pill"] == "🟢 OK" else "secondary"):
+        st.session_state["filtro_status_pill"] = "🟢 OK"
+        st.rerun()
 
     cp1, cp2, cp3, cp4, cp5 = st.columns([1.2, 1.1, 1.1, 1.4, 1.2])
-    with cp1: setor_sel = st.selectbox("⚡ Setor:", ["Todos"] + list(df["categoria"].unique()))
-    with cp2: abc_sel = st.selectbox("🏆 Curva ABC:", ["Todas", "Classe A", "Classe B", "Classe C"])
-    with cp3: xyz_sel = st.selectbox("🔍 Criticidade XYZ:", ["Todas", "Z (Vital)", "Y (Média)", "X (Baixa)"])
-    with cp4: busca_nome = st.text_input("🔍 Busca por Insumo:")
-    with cp5: apenas_compras_chk = st.checkbox("🛒 Apenas Compras", value=False)
+    with cp1:
+        setor_sel = st.selectbox("⚡ Setor:", ["Todos"] + list(df["categoria"].unique()))
+    with cp2:
+        abc_sel = st.selectbox("🏆 Curva ABC:", ["Todas", "Classe A", "Classe B", "Classe C"])
+    with cp3:
+        xyz_sel = st.selectbox("🔍 Criticidade XYZ:", ["Todas", "Z (Vital)", "Y (Média)", "X (Baixa)"])
+    with cp4:
+        busca_nome = st.text_input("🔍 Busca por Insumo:")
+    with cp5:
+        apenas_compras_chk = st.checkbox("🛒 Apenas Compras", value=False)
 
     df_filtrado = df.copy()
     if st.session_state["filtro_status_pill"] != "Todos": 
@@ -424,9 +455,12 @@ def render_dashboard_ui(df):
         df_filtrado = df_filtrado[df_filtrado["Sugestão Compra"] > 0]
 
     def destacar_status(val):
-        if '🔴' in str(val): return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
-        if '🟠' in str(val): return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
-        if '🟢' in str(val): return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
+        if '🔴' in str(val):
+            return 'background-color: rgba(239, 68, 68, 0.35); color: #000000; font-weight: bold;'
+        if '🟠' in str(val):
+            return 'background-color: rgba(245, 158, 11, 0.35); color: #000000; font-weight: bold;'
+        if '🟢' in str(val):
+            return 'background-color: rgba(16, 185, 129, 0.35); color: #000000; font-weight: bold;'
         return ''
 
     def format_tendencia(t):
@@ -434,8 +468,10 @@ def render_dashboard_ui(df):
             return "➡️ Estável"
         try:
             val = float(t)
-            if val == 0: return "➡️ Estável"
-            if val > 0: return f"📈 +{val:.0f}%"
+            if val == 0:
+                return "➡️ Estável"
+            if val > 0:
+                return f"📈 +{val:.0f}%"
             return f"📉 {val:.0f}%"
         except (ValueError, TypeError):
             return str(t) if str(t).strip() else "➡️ Estável"
@@ -483,12 +519,14 @@ def render_dashboard_ui(df):
                 st.markdown("##### 📊 Giro Total por Categoria")
                 giro_setor = df.groupby("categoria")["total"].sum().reset_index().rename(columns={"categoria": "Setor", "total": "Movimentações"})
                 fig_giro = px.bar(giro_setor, x="Setor", y="Movimentações", color="Movimentações", text_auto=True, color_continuous_scale="Viridis")
-                apply_premium_chart_theme(fig_giro); st.plotly_chart(fig_giro, use_container_width=True)
+                apply_premium_chart_theme(fig_giro)
+                st.plotly_chart(fig_giro, use_container_width=True)
             with g2:
                 st.markdown("##### 🏆 Capital por Setor")
                 valor_setor = df.groupby("categoria")["valor_total"].sum().reset_index().rename(columns={"categoria": "Setor", "valor_total": "Valor Total"})
                 fig_pie = px.pie(valor_setor, values="Valor Total", names="Setor", hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-                apply_premium_chart_theme(fig_pie); st.plotly_chart(fig_pie, use_container_width=True)
+                apply_premium_chart_theme(fig_pie)
+                st.plotly_chart(fig_pie, use_container_width=True)
         with g_tabs[1]:
             st.markdown("##### 🏆 Análise Pareto Curva ABC")
             df_abc_tab = df.sort_values(by="valor_total", ascending=False).copy()
@@ -499,20 +537,23 @@ def render_dashboard_ui(df):
                 fig_abc = go.Figure()
                 fig_abc.add_trace(go.Bar(x=df_abc_tab["nome"], y=df_abc_tab["valor_total"], name="Valor"))
                 fig_abc.add_trace(go.Scatter(x=df_abc_tab["nome"], y=df_abc_tab["perc_acumulado"], name="% Acumulado", yaxis="y2"))
-                apply_premium_chart_theme(fig_abc, is_dual_axis=True); st.plotly_chart(fig_abc, use_container_width=True)
+                apply_premium_chart_theme(fig_abc, is_dual_axis=True)
+                st.plotly_chart(fig_abc, use_container_width=True)
         with g_tabs[2]:
             st.markdown("##### 🔍 Matriz Cruzada ABC-XYZ")
             df_matriz = df.copy()
             df_matriz["XYZ"] = df_matriz["criticidade"].apply(lambda c: "Z (Vital)" if str(c).upper()=="Z" else ("X (Baixa)" if str(c).upper()=="X" else "Y (Média)"))
             tabela_cruzada = pd.crosstab(df_matriz["Classe_ABC"], df_matriz["XYZ"], values=df_matriz["valor_total"], aggfunc="sum").fillna(0)
             fig_heatmap = px.imshow(tabela_cruzada, color_continuous_scale="Blues", text_auto=".2f")
-            apply_premium_chart_theme(fig_heatmap); st.plotly_chart(fig_heatmap, use_container_width=True)
+            apply_premium_chart_theme(fig_heatmap)
+            st.plotly_chart(fig_heatmap, use_container_width=True)
         with g_tabs[3]:
             st.markdown("##### 🎯 Matriz Dinâmica de Risco")
             df_scatter = df.copy()
             df_scatter['Runway_Scatter'] = df_scatter['Runway'].apply(lambda x: 45 if x == 999 else min(x, 45))
             fig_scatter = px.scatter(df_scatter, x="Runway_Scatter", y="lead_time", color="Status", size=df_scatter["saldo_atual"].clip(lower=8))
-            apply_premium_chart_theme(fig_scatter); st.plotly_chart(fig_scatter, use_container_width=True)
+            apply_premium_chart_theme(fig_scatter)
+            st.plotly_chart(fig_scatter, use_container_width=True)
         with g_tabs[4]:
             st.markdown("##### 🔮 Previsão Preditiva")
             df_pred_tab = calcular_previsao_demanda_preditiva(df, metodo=metodo_consumo, janela_dias=janela_dias)

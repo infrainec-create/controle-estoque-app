@@ -15,14 +15,14 @@ def render_config_ui(df):
         pend_usrs = cnt_usrs[1] if cnt_usrs and cnt_usrs[1] is not None else 0
         row_sync = conn.execute("SELECT mensagem, timestamp FROM status_sincronismo WHERE chave = 'global'").fetchone()
     
-    status_nuvem = row_sync[0] if row_sync else "Nuvem Operacional"
+    status_nuvem = row_sync[0] if row_sync else "Conectado"
     ts_nuvem = row_sync[1] if row_sync else "Recente"
     
     cfg_col1, cfg_col2, cfg_col3, cfg_col4 = st.columns(4)
     cfg_col1.metric("📦 Catálogo de Insumos", f"{len(df)} cadastrados")
     cfg_col2.metric("👥 Operadores no Sistema", f"{tot_usrs} usuários")
     cfg_col3.metric("⏳ Solicitações Pendentes", f"{pend_usrs} pendentes", delta_color="inverse" if pend_usrs > 0 else "normal")
-    cfg_col4.metric("☁️ Status da Nuvem", "Conectado", f"Última sync: {ts_nuvem}")
+    cfg_col4.metric("☁️ Status da Nuvem", status_nuvem, f"Última sync: {ts_nuvem}")
 
     st.divider()
 
@@ -121,12 +121,12 @@ def render_config_ui(df):
             n = st.text_input("Nome do Insumo")
             c = st.selectbox("Setor", ["Limpeza", "Copa", "EPI", "Escritório", "Geral"])
             m = st.number_input("Mínimo", value=10, min_value=0)
-            l = st.number_input("Lead Time (Dias)", value=3, min_value=0)
+            lead_time = st.number_input("Lead Time (Dias)", value=3, min_value=0)
             v = st.number_input("Valor Inicial Un. (R$)", value=0.0, min_value=0.0)
             crit = st.selectbox("Criticidade (XYZ)", ["X (Baixa)", "Y (Média)", "Z (Crítica/Vital)"], index=1)
             if st.form_submit_button("Cadastrar"):
                 if n.strip():
-                    sucesso, msg = cadastrar_produto(n.strip(), m, v, c, l, crit[0])
+                    sucesso, msg = cadastrar_produto(n.strip(), m, v, c, lead_time, crit[0])
                     if sucesso:
                         registrar_log_auditoria(st.session_state["usuario_atual"], "Cadastrar Insumo", f"Insumo '{n.strip()}' cadastrado. Setor: {c}, Mínimo: {m}, Preço: R$ {v:.2f}, Criticidade: {crit[0]}")
                         disparar_sincronizacao()

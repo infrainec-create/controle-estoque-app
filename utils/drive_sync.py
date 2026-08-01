@@ -460,8 +460,10 @@ def descarregar_do_drive():
             for suffix in ["-wal", "-shm"]:
                 extra_file = DB_PATH + suffix
                 if os.path.exists(extra_file):
-                    try: os.remove(extra_file)
-                    except Exception: pass
+                    try:
+                        os.remove(extra_file)
+                    except Exception:
+                        pass
             
             salvar_ultimo_sync_time_local(file_meta.get('modifiedTime'))
             

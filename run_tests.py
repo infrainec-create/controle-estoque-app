@@ -18,8 +18,8 @@ for suffix in ["-wal", "-shm"]:
         os.remove(extra_file)
 
 # Importa os módulos do sistema para testar após a alteração do DB_PATH
-from database.schema import init_db
-from database.queries import (
+from database.schema import init_db  # noqa: E402
+from database.queries import (  # noqa: E402
     listar_produtos,
     cadastrar_produto,
     editar_produto,
@@ -28,15 +28,15 @@ from database.queries import (
     registrar_entrada_produto,
     registrar_saida_produto
 )
-from utils.security import gerar_hash_senha
-from utils.reports import (
+from utils.security import gerar_hash_senha  # noqa: E402
+from utils.reports import (  # noqa: E402
     gerar_excel_estoque,
     gerar_excel_movimentacoes,
     gerar_excel_auditoria,
     gerar_html_pdf_estoque
 )
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
 class TestWMSRegression(unittest.TestCase):
     
@@ -57,8 +57,10 @@ class TestWMSRegression(unittest.TestCase):
         for suffix in ["-wal", "-shm"]:
             extra_file = TEST_DB_PATH + suffix
             if os.path.exists(extra_file):
-                try: os.remove(extra_file)
-                except: pass
+                try:
+                    os.remove(extra_file)
+                except Exception:
+                    pass
 
     def test_01_security_hash(self):
         print("Teste 1: Validando criptografia de senhas (PBKDF2 com Salt)...")

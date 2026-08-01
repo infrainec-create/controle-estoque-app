@@ -1,4 +1,3 @@
-from datetime import datetime
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -80,9 +79,12 @@ def render_audit_ui(df):
     def priority_score(row):
         abc = row["Classe_ABC"]
         xyz = row["criticidade"]
-        if abc == "A" and xyz == "Z": return 1
-        if abc == "A" or xyz == "Z": return 2
-        if abc == "B" or xyz == "Y": return 3
+        if abc == "A" and xyz == "Z":
+            return 1
+        if abc == "A" or xyz == "Z":
+            return 2
+        if abc == "B" or xyz == "Y":
+            return 3
         return 4
 
     df["Score_Prioridade"] = df.apply(priority_score, axis=1)
@@ -344,8 +346,10 @@ def render_audit_ui(df):
             df_display_aud['Preço_Txt'] = df_display_aud['Preço Unit.'].apply(lambda v: f"R$ {v:,.2f}")
 
             def destacar_div(val):
-                if val < 0: return 'color: #ef4444; font-weight: bold;'
-                if val > 0: return 'color: #10b859; font-weight: bold;'
+                if val < 0:
+                    return 'color: #ef4444; font-weight: bold;'
+                if val > 0:
+                    return 'color: #10b859; font-weight: bold;'
                 return 'color: #94a3b8;'
 
             st.dataframe(
