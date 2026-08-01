@@ -3,12 +3,12 @@ import pandas as pd
 from database.connection import get_conn, retry_db_operation, DB_PATH
 from utils.date_helpers import formatar_timestamp_utc
 
-@st.cache_data
+@st.cache_data(ttl=600, show_spinner=False)
 def listar_produtos():
     with get_conn() as conn: 
         return pd.read_sql("SELECT * FROM produtos ORDER BY nome", conn)
 
-@st.cache_data
+@st.cache_data(ttl=600, show_spinner=False)
 def listar_movimentacoes():
     with get_conn() as conn:
         return pd.read_sql("""

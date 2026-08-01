@@ -1,7 +1,6 @@
 import os
 import sqlite3
 import time
-
 from contextlib import contextmanager
 
 # Definição absoluta do caminho do banco para evitar duplicidades
@@ -10,10 +9,21 @@ DB_PATH = os.path.join(BASE_DIR, "estoque.db")
 
 @contextmanager
 def get_conn():
+    """
+    Abre uma conexão otimizada com o SQLite com modo WAL (Write-Ahead Logging),
+    timeout de concorrência e integridade de chaves estrangeiras.
+    """
     # timeout=30.0 força a conexão a aguardar se o banco estiver ocupado
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
-    # Habilita a checagem e integridade de chaves estrangeiras (Foreign Keys)
-    conn.execute("PRAGMA foreign_keys = ON;")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 10000;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except Exception:
+        pass
+        
     try:
         with conn:
             yield conn

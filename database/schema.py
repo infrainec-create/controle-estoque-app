@@ -7,7 +7,7 @@ def init_db():
     with get_conn() as conn:
         # Configuração do modo de jornal compatível com contêineres e nuvens (ex: Streamlit Cloud)
         try:
-            conn.execute("PRAGMA journal_mode=DELETE;")
+            conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
         except Exception:
             pass
