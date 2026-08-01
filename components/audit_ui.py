@@ -1,15 +1,26 @@
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 from database.connection import get_conn
 from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
 from utils.backup import realizar_backup_local
 from utils.consumption import obter_agora_fortaleza
 
+def apply_chart_theme(fig):
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Source Sans Pro, Inter, sans-serif"),
+        xaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
+        yaxis=dict(gridcolor="rgba(128, 128, 128, 0.12)", zeroline=False),
+        margin=dict(l=20, r=20, t=35, b=20),
+    )
+
 def render_audit_ui(df):
     st.subheader("📋 Auditoria de Inventário & Gestão de Divergências")
-    st.caption("Conferência de saldo físico na prateleira vs. saldo registrado no sistema WMS.")
+    st.caption("Conferência de saldo físico na prateleira vs. saldo registrado no sistema WMS com análise de causa raiz e impacto financeiro.")
     
     if df.empty:
         st.info("Nenhum insumo disponível para auditoria física.")
@@ -93,6 +104,7 @@ def render_audit_ui(df):
         else:
             st.success("🎉 Todos os insumos prioritários de hoje já foram auditados com sucesso!")
 
+    # ─── REGISTRO DE CONTAGEM FÍSICA E CLASSIFICAÇÃO DE CAUSA RAIZ ───
     with st.container(border=True):
         st.markdown("##### ✏️ Registrar Nova Contagem Física")
         
@@ -109,39 +121,66 @@ def render_audit_ui(df):
         with c_a1:
             sel_c = st.selectbox("Selecione o Insumo para Contagem:", list(ops.keys()), key="c_p")
             id_pc = ops[sel_c]
-            s_sis = int(df.loc[df["id"]==id_pc, "saldo_atual"].values[0])
+            p_sel = df.loc[df["id"]==id_pc].iloc[0]
+            s_sis = int(p_sel["saldo_atual"])
+            v_unit = float(p_sel["valor_unitario"])
         with c_a2:
-            st.metric("Saldo Sistema", f"{s_sis} un")
+            st.metric("Saldo Sistema", f"{s_sis} un", f"R$ {s_sis * v_unit:,.2f}")
 
         c_q1, c_q2 = st.columns([1, 2])
         with c_q1:
             f_cont = st.number_input("Quantidade Física Contada", min_value=0, value=s_sis, step=1, key="c_q")
         with c_q2:
             diff = f_cont - s_sis
+            imp_fin = diff * v_unit
             if diff == 0:
                 st.success("🟢 Contagem exata! Nenhuma divergência detectada.")
+                motivo_div = "Contagem Exata"
             elif diff > 0:
-                st.info(f"📈 Sobra física identificada: **+{diff} un.** em relação ao sistema.")
+                st.info(f"📈 Sobra física identificada: **+{diff} un.** (Valor: **+R$ {imp_fin:,.2f}**)")
+                motivo_div = st.selectbox(
+                    "Selecione a Causa Provável da Sobra:",
+                    [
+                        "Sobra de Inventário Anterior",
+                        "Erro de Entrada / Nota Fiscal Não Lançada",
+                        "Devolução Física sem Registro",
+                        "Outra Causa / Ajuste Operacional"
+                    ],
+                    key="mot_sobra"
+                )
             else:
-                st.warning(f"📉 Falta física / Perda identificada: **{diff} un.** em relação ao sistema.")
+                st.warning(f"📉 Falta física / Perda identificada: **{diff} un.** (Prejuízo Estimado: **R$ {abs(imp_fin):,.2f}**)")
+                motivo_div = st.selectbox(
+                    "Selecione a Causa Provável da Falta:",
+                    [
+                        "Consumo Não Registrado (Falta de Baixa)",
+                        "Avaria / Danificado / Vencido",
+                        "Divergência em Entrega de Fornecedor",
+                        "Contagem Incorreta Anterior",
+                        "Outra Causa / Perda Desconhecida"
+                    ],
+                    key="mot_falta"
+                )
         
         if st.button("💾 Gravar Ajuste de Inventário", use_container_width=True, type="primary"):
             with get_conn() as conn:
                 conn.execute("UPDATE produtos SET saldo_atual = ? WHERE id = ?", (f_cont, id_pc))
                 data = obter_agora_fortaleza().strftime("%d/%m/%Y %H:%M")
-                obs_inv = f"Inventário Semanal | Op: {st.session_state['usuario_atual']}"
+                obs_inv = f"Motivo: {motivo_div} | Operador: {st.session_state['usuario_atual']}"
                 conn.execute("INSERT INTO movimentacoes (id_produto, data_hora, tipo, quantidade, saldo_resultante, observacao) VALUES (?, ?, 'Contagem', ?, ?, ?)", (id_pc, data, diff, f_cont, obs_inv))
             
-            detalhes_log = f"Realizou contagem física do insumo '{sel_c}'. Saldo no sistema: {s_sis} un., Físico: {f_cont} un. Divergência: {diff} un."
+            detalhes_log = f"Realizou contagem física do insumo '{sel_c}'. Saldo no sistema: {s_sis} un., Físico: {f_cont} un. Divergência: {diff} un. Motivo: '{motivo_div}'."
             registrar_log_auditoria(st.session_state["usuario_atual"], "Ajuste de Inventário", detalhes_log)
             
             realizar_backup_local()
             disparar_sincronizacao()
-            st.toast("📋 Inventário gravado!", icon="💾")
+            st.toast("📋 Inventário e Causa Raiz gravados!", icon="💾")
             st.rerun()
 
+    # ─── HISTÓRICO & RELATÓRIO ANALÍTICO DE DIVERGÊNCIAS ───
     st.divider()
-    st.markdown("##### 📉 Histórico & Relatório de Divergências de Inventário")
+    st.markdown("##### 📉 Histórico & Relatório Analítico de Divergências de Inventário")
+    st.caption("Análise financeira do impacto das divergências (faltas e sobras) e histórico de causas raiz registradas.")
     
     col_fa1, col_fa2 = st.columns(2)
     with col_fa1:
@@ -152,14 +191,15 @@ def render_audit_ui(df):
         )
     
     prod_lista = ["Todos os Insumos"] + list(df["nome"].unique())
-    prod_aud_sel = st.selectbox("Filtrar auditorias por insumo:", prod_lista)
+    with col_fa2:
+        prod_aud_sel = st.selectbox("Filtrar auditorias por insumo:", prod_lista)
     
     query_hist = """
-        SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', 
+        SELECT m.data_hora as 'Data/Hora', p.nome as 'Produto', p.categoria as 'Setor', p.valor_unitario as 'Preço Unit.',
                (m.saldo_resultante - m.quantidade) as 'Saldo Anterior',
                m.saldo_resultante as 'Contagem Física',
-               m.quantidade as 'Divergência',
-               m.observacao as 'Registro'
+               m.quantidade as 'Divergência (un)',
+               m.observacao as 'Registro / Causa Raiz'
         FROM movimentacoes m 
         JOIN produtos p ON p.id = m.id_produto
         WHERE m.tipo = 'Contagem'
@@ -194,40 +234,102 @@ def render_audit_ui(df):
             data_inicio = hist_inv['dt'].min() if not hist_inv['dt'].isna().all() else hoje_now
             data_fim = hoje_now
         else:
-            with col_fa2:
-                data_range_aud = st.date_input(
-                    "Intervalo de Datas:",
-                    value=(hoje_now.date() - pd.Timedelta(days=30), hoje_now.date()),
-                    key="range_aud"
-                )
-                if isinstance(data_range_aud, tuple) and len(data_range_aud) == 2:
-                    data_inicio = pd.Timestamp(data_range_aud[0])
-                    data_fim = pd.Timestamp(data_range_aud[1])
-                else:
-                    data_inicio = hoje_now - pd.Timedelta(days=30)
-                    data_fim = hoje_now
+            data_range_aud = st.date_input(
+                "Intervalo de Datas:",
+                value=(hoje_now.date() - pd.Timedelta(days=30), hoje_now.date()),
+                key="range_aud"
+            )
+            if isinstance(data_range_aud, tuple) and len(data_range_aud) == 2:
+                data_inicio = pd.Timestamp(data_range_aud[0])
+                data_fim = pd.Timestamp(data_range_aud[1])
+            else:
+                data_inicio = hoje_now - pd.Timedelta(days=30)
+                data_fim = hoje_now
                     
         hist_inv_filtrado = hist_inv[(hist_inv['dt'] >= data_inicio) & (hist_inv['dt'] <= data_fim + pd.Timedelta(days=1))].copy()
         
         if not hist_inv_filtrado.empty:
-            df_mostrar = hist_inv_filtrado.drop(columns=['dt'])
+            # Calcular Impacto Financeiro da Divergência (R$)
+            hist_inv_filtrado['Impacto Financeiro (R$)'] = hist_inv_filtrado['Divergência (un)'] * hist_inv_filtrado['Preço Unit.']
             
-            total_divergencias = df_mostrar['Divergência'].sum()
-            perdas_totais = df_mostrar[df_mostrar['Divergência'] < 0]['Divergência'].sum()
-            sobras_totais = df_mostrar[df_mostrar['Divergência'] > 0]['Divergência'].sum()
+            tot_audits = len(hist_inv_filtrado)
+            audits_com_div = (hist_inv_filtrado['Divergência (un)'] != 0).sum()
+            perdas_fin_totais = hist_inv_filtrado[hist_inv_filtrado['Divergência (un)'] < 0]['Impacto Financeiro (R$)'].sum()
+            sobras_fin_totais = hist_inv_filtrado[hist_inv_filtrado['Divergência (un)'] > 0]['Impacto Financeiro (R$)'].sum()
+            balanco_liquido_fin = hist_inv_filtrado['Impacto Financeiro (R$)'].sum()
             
-            ck_1, ck_2, ck_3 = st.columns(3)
-            ck_1.metric("⚖️ Balanço de Ajustes", f"{int(total_divergencias)} un")
-            ck_2.metric("📉 Perdas Totais", f"{int(abs(perdas_totais))} un", delta_color="inverse")
-            ck_3.metric("📈 Sobras Identificadas", f"{int(sobras_totais)} un")
+            # --- CARTOES DE IMPACTO FINANCEIRO ---
+            ck_1, ck_2, ck_3, ck_4 = st.columns(4)
+            ck_1.metric("📋 Auditadas no Período", f"{tot_audits} contagens", f"{audits_com_div} c/ divergência")
+            ck_2.metric("📉 Perdas (Faltas R$)", f"R$ {abs(perdas_fin_totais):,.2f}", delta_color="inverse")
+            ck_3.metric("📈 Sobras (Entradas R$)", f"R$ {sobras_fin_totais:,.2f}")
+            ck_4.metric("⚖️ Balanço Líquido (R$)", f"R$ {balanco_liquido_fin:,.2f}", delta_color="normal" if balanco_liquido_fin >= 0 else "inverse")
             
-            st.write("---")
+            st.divider()
             
-            def cor_divergencia(val):
+            # --- GRÁFICO TOP 5 MAIORES DIVERGÊNCIAS FINANCEIRAS ---
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.markdown("##### 🏆 Top Insumos com Maior Perda Financeira (R$)")
+                perdas_por_prod = hist_inv_filtrado[hist_inv_filtrado['Divergência (un)'] < 0].groupby('Produto')['Impacto Financeiro (R$)'].sum().abs().reset_index()
+                if not perdas_por_prod.empty:
+                    perdas_por_prod = perdas_por_prod.sort_values(by='Impacto Financeiro (R$)', ascending=True).tail(5)
+                    fig_perdas = px.bar(perdas_por_prod, x='Impacto Financeiro (R$)', y='Produto', orientation='h', color='Impacto Financeiro (R$)', color_continuous_scale='Reds', text_auto='.2f')
+                    apply_chart_theme(fig_perdas)
+                    st.plotly_chart(fig_perdas, use_container_width=True)
+                else:
+                    st.success("🎉 Nenhuma perda por divergência registrada no período!")
+                    
+            with col_g2:
+                st.markdown("##### 🔍 Motivos / Causas Raiz Registradas")
+                hist_inv_filtrado['Causa_Limpa'] = hist_inv_filtrado['Registro / Causa Raiz'].apply(
+                    lambda r: r.split('|')[0].replace('Motivo:', '').replace('Inventário Semanal', 'Sem Causa Específica').strip() if 'Motivo:' in str(r) else 'Ajuste Geral'
+                )
+                causas_df = hist_inv_filtrado[hist_inv_filtrado['Divergência (un)'] != 0]['Causa_Limpa'].value_counts().reset_index()
+                causas_df.columns = ['Motivo', 'Quantidade']
+                if not causas_df.empty:
+                    fig_causas = px.pie(causas_df, values='Quantidade', names='Motivo', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+                    apply_chart_theme(fig_causas)
+                    st.plotly_chart(fig_causas, use_container_width=True)
+                else:
+                    st.info("Nenhuma divergência registrada no período para análise de causa.")
+
+            st.divider()
+
+            # --- TABELA DETALHADA COM EXPORTAÇÃO ---
+            st.markdown("##### 📋 Tabela Analítica de Divergências de Inventário")
+            
+            df_display_aud = hist_inv_filtrado[[
+                'Data/Hora', 'Setor', 'Produto', 'Saldo Anterior', 'Contagem Física', 
+                'Divergência (un)', 'Preço Unit.', 'Impacto Financeiro (R$)', 'Registro / Causa Raiz'
+            ]].copy()
+            
+            df_display_aud['Impacto_Txt'] = df_display_aud['Impacto Financeiro (R$)'].apply(lambda v: f"R$ {v:,.2f}")
+            df_display_aud['Preço_Txt'] = df_display_aud['Preço Unit.'].apply(lambda v: f"R$ {v:,.2f}")
+
+            def destacar_div(val):
                 if val < 0: return 'color: #ef4444; font-weight: bold;'
                 if val > 0: return 'color: #10b859; font-weight: bold;'
                 return 'color: #94a3b8;'
-            st.dataframe(df_mostrar.style.map(cor_divergencia, subset=['Divergência']), hide_index=True, width='stretch')
+
+            st.dataframe(
+                df_display_aud[[
+                    'Data/Hora', 'Setor', 'Produto', 'Saldo Anterior', 'Contagem Física', 
+                    'Divergência (un)', 'Preço_Txt', 'Impacto_Txt', 'Registro / Causa Raiz'
+                ]].rename(columns={'Preço_Txt': 'Preço Unit.', 'Impacto_Txt': 'Impacto (R$)'}).style.map(destacar_div, subset=['Divergência (un)']), 
+                hide_index=True, 
+                use_container_width=True
+            )
+
+            # Botão de Exportação CSV / Excel da Auditoria
+            csv_aud = df_display_aud.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                "📥 Baixar Relatório de Divergências de Inventário (.csv / Excel)",
+                data=csv_aud,
+                file_name=f"Relatorio_Divergencias_Inventario_{obter_agora_fortaleza().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=False
+            )
         else:
             st.warning("⚠️ Nenhum registro de inventário encontrado para o período selecionado.")
     else:
