@@ -5,9 +5,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from database.connection import get_conn
-from database.queries import listar_movimentacoes
-from utils.consumption import processar_consumo_produtos, calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
-from utils.date_helpers import calcular_previsao_entrega
+from utils.consumption import (
+    processar_consumo_produtos, 
+    calcular_previsao_demanda_preditiva, 
+    calcular_custo_posse_estoque,
+    calcular_matriz_kraljic,
+    obter_historico_precos_insumos
+)
 from utils.reports import gerar_html_pdf_estoque
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
@@ -462,7 +466,15 @@ def render_dashboard_ui(df):
     # ─── 3. CONTAINER SANFONADO DE ANÁLISES GRÁFICAS COMPLETA ───
     st.divider()
     with st.expander("📊 Análises Gráficas, Curva ABC/XYZ & Previsão Preditiva", expanded=False):
-        g_tabs = st.tabs(["📈 Distribuição & Giro", "🏆 Curva ABC (Financeiro)", "🔍 Matriz ABC-XYZ (Criticidade)", "🎯 Matriz de Risco & Lead Time", "🔮 Previsão Preditiva & Posse"])
+        g_tabs = st.tabs([
+            "📈 Distribuição & Giro", 
+            "🏆 Curva ABC (Financeiro)", 
+            "🔍 Matriz ABC-XYZ (Criticidade)", 
+            "🎯 Matriz de Risco & Lead Time", 
+            "🔮 Previsão Preditiva & Posse",
+            "📉 Inflação de Insumos",
+            "🧩 Matriz Kraljic"
+        ])
         with g_tabs[0]:
             g1, g2 = st.columns(2)
             with g1:
@@ -509,6 +521,83 @@ def render_dashboard_ui(df):
             c_p3.metric("🛑 Capital Parado", f"R$ {info_posse_tab.get('valor_capital_parado', 0):,.2f}")
             c_p4.metric("🔮 Prev. 30d", f"{df_pred_tab['prev_30d'].sum():,.0f} un.")
             st.dataframe(df_pred_tab.head(), hide_index=True, use_container_width=True)
+        with g_tabs[5]:
+            st.markdown("##### 📉 Histórico de Inflação & Evolução do Preço dos Insumos")
+            try:
+                with get_conn() as conn:
+                    df_precos = obter_historico_precos_insumos(conn)
+            except Exception:
+                df_precos = pd.DataFrame()
+                
+            if not df_precos.empty:
+                prod_selecionado = st.selectbox("Selecione o Insumo para analisar o Histórico de Preço Pago:", df_precos["produto"].unique(), key="sel_prod_inflacao")
+                df_p_prod = df_precos[df_precos["produto"] == prod_selecionado].sort_values(by="dt")
+                
+                if len(df_p_prod) > 0:
+                    p_ini = float(df_p_prod.iloc[0]["preco_pago"])
+                    p_fim = float(df_p_prod.iloc[-1]["preco_pago"])
+                    var_pct = ((p_fim - p_ini) / p_ini * 100.0) if p_ini > 0 else 0.0
+                    
+                    c_inf1, c_inf2, c_inf3 = st.columns(3)
+                    c_inf1.metric("Primeira Compra (R$)", f"R$ {p_ini:,.2f}")
+                    c_inf2.metric("Última Compra (R$)", f"R$ {p_fim:,.2f}")
+                    c_inf3.metric("Variação de Preço (%)", f"{var_pct:+.1f}%", delta_color="inverse")
+                    
+                    fig_precos = px.line(df_p_prod, x="data_hora", y="preco_pago", markers=True, title=f"Evolução do Preço de Compra - {prod_selecionado}")
+                    fig_precos.update_layout(yaxis_title="Preço Unitário (R$)", xaxis_title="Data de Entrada")
+                    apply_premium_chart_theme(fig_precos)
+                    st.plotly_chart(fig_precos, use_container_width=True)
+            else:
+                st.info("Ainda não há lançamentos históricos de preço de compra registrados nas entradas.")
+        with g_tabs[6]:
+            st.markdown("##### 🧩 Matriz Kraljic de Matérias-Primas (Gestão Estratégica de Suprimentos)")
+            st.caption("Classificação dos insumos por Risco de Suprimento vs. Impacto Financeiro para definição de estratégias de negociação.")
+            
+            df_kraljic = calcular_matriz_kraljic(df)
+            
+            n_est = (df_kraljic["Quadrante_Kraljic"].str.contains("Estratégico")).sum()
+            n_gar = (df_kraljic["Quadrante_Kraljic"].str.contains("Gargalo")).sum()
+            n_ala = (df_kraljic["Quadrante_Kraljic"].str.contains("Alavancagem")).sum()
+            n_rot = (df_kraljic["Quadrante_Kraljic"].str.contains("Rotineiro")).sum()
+            
+            ck1, ck2, ck3, ck4 = st.columns(4)
+            ck1.metric("🔴 Estratégicos", f"{n_est} itens")
+            ck2.metric("🟠 Gargalo", f"{n_gar} itens")
+            ck3.metric("🟡 Alavancagem", f"{n_ala} itens")
+            ck4.metric("🟢 Rotineiros", f"{n_rot} itens")
+            
+            st.divider()
+            
+            fig_kr = px.scatter(
+                df_kraljic, 
+                x="lead_time", 
+                y="valor_total", 
+                color="Quadrante_Kraljic", 
+                size=df_kraljic["saldo_atual"].clip(lower=5), 
+                hover_name="nome",
+                text="nome",
+                labels={"lead_time": "Risco de Suprimento (Lead Time em dias)", "valor_total": "Impacto Financeiro (Valuation R$)"}
+            )
+            fig_kr.update_traces(textposition='top center')
+            apply_premium_chart_theme(fig_kr)
+            st.plotly_chart(fig_kr, use_container_width=True)
+            
+            st.markdown("**📋 Insumos e Diretrizes de Compras (Matriz Kraljic):**")
+            st.dataframe(
+                df_kraljic[["categoria", "nome", "Classe_ABC", "criticidade", "lead_time", "Quadrante_Kraljic", "Estrategia_Recomendada"]].rename(
+                    columns={
+                        "categoria": "Setor",
+                        "nome": "Produto / Insumo",
+                        "Classe_ABC": "ABC",
+                        "criticidade": "Crit.",
+                        "lead_time": "Lead Time (dias)",
+                        "Quadrante_Kraljic": "Quadrante Kraljic",
+                        "Estrategia_Recomendada": "Diretriz Estratégica"
+                    }
+                ),
+                hide_index=True,
+                use_container_width=True
+            )
 
     # ─── EXPORTAÇÃO DO RELATÓRIO EXECUTIVO COMPLETO ───
     st.divider()

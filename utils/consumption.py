@@ -315,3 +315,89 @@ def calcular_custo_posse_estoque(df_produtos, taxa_anual_posse=0.15):
         'total_itens_parados': len(df_parados),
         'df_parados': df_parados
     }
+
+def calcular_matriz_kraljic(df_produtos):
+    """
+    Classifica cada insumo nos 4 quadrantes da Matriz Kraljic:
+      1. 🔴 Estratégico: Alto Impacto Financeiro (Classe A) + Alto Risco de Suprimento (Criticidade Z ou Lead Time >= 5d)
+      2. 🟠 Gargalo: Baixo Impacto Financeiro (Classe B/C) + Alto Risco de Suprimento (Criticidade Z ou Lead Time >= 5d)
+      3. 🟡 Alavancagem: Alto Impacto Financeiro (Classe A) + Baixo Risco de Suprimento (Criticidade X/Y e Lead Time < 5d)
+      4. 🟢 Rotineiro: Baixo Impacto Financeiro (Classe B/C) + Baixo Risco de Suprimento (Criticidade X/Y e Lead Time < 5d)
+    """
+    df = df_produtos.copy()
+    if df.empty:
+        df['Quadrante_Kraljic'] = []
+        df['Estrategia_Recomendada'] = []
+        return df
+
+    if 'Classe_ABC' not in df.columns:
+        df['valor_total'] = df['saldo_atual'] * df['valor_unitario']
+        df_sorted = df.sort_values(by='valor_total', ascending=False).copy()
+        tot_val = df_sorted['valor_total'].sum()
+        if tot_val > 0:
+            df_sorted['perc_acum'] = (df_sorted['valor_total'].cumsum() / tot_val) * 100
+            df_sorted['Classe_ABC'] = df_sorted['perc_acum'].apply(lambda p: 'A' if p <= 80 else ('B' if p <= 95 else 'C'))
+        else:
+            df_sorted['Classe_ABC'] = 'C'
+        df['Classe_ABC'] = df['id'].map(dict(zip(df_sorted['id'], df_sorted['Classe_ABC']))).fillna('C')
+
+    def classificar_kraljic(row):
+        abc = str(row.get('Classe_ABC', 'C')).upper()
+        xyz = str(row.get('criticidade', 'Y')).upper()
+        lead = int(row.get('lead_time', 3))
+
+        alto_impacto = (abc == 'A')
+        alto_risco = (xyz == 'Z') or (lead >= 5)
+
+        if alto_impacto and alto_risco:
+            return "🔴 Estratégico", "Contratos de longo prazo, alianças com fornecedores e estoques de segurança rigorosos"
+        elif not alto_impacto and alto_risco:
+            return "🟠 Gargalo", "Garantia de suprimento, busca ativa de fornecedores substitutos e estoques de contingência"
+        elif alto_impacto and not alto_risco:
+            return "🟡 Alavancagem", "Cotações agressivas de preço, negociação por volume e contratos curtos para obter margem"
+        else:
+            return "🟢 Rotineiro", "Padronização de pedidos, automação de compras e baixas operacionais enxutas"
+
+    results = df.apply(classificar_kraljic, axis=1)
+    df['Quadrante_Kraljic'] = [r[0] for r in results]
+    df['Estrategia_Recomendada'] = [r[1] for r in results]
+    return df
+
+def obter_historico_precos_insumos(conn):
+    """
+    Busca o historico de compras/entradas no banco de dados e extrai a evolucao
+    do preco unitario pago por cada insumo ao longo do tempo.
+    """
+    import re
+    movs = pd.read_sql("""
+        SELECT m.id_produto, p.nome AS produto, p.categoria, m.data_hora, m.quantidade, m.observacao, p.valor_unitario AS preco_atual
+        FROM movimentacoes m
+        JOIN produtos p ON p.id = m.id_produto
+        WHERE m.tipo = 'Entrada'
+        ORDER BY m.id ASC
+    """, conn)
+    
+    if movs.empty:
+        return pd.DataFrame(columns=['id_produto', 'produto', 'categoria', 'dt', 'data_hora', 'preco_pago'])
+        
+    movs['dt'] = pd.to_datetime(movs['data_hora'], format='%d/%m/%Y %H:%M', errors='coerce')
+    mask_nat = movs['dt'].isna()
+    if mask_nat.any():
+        movs.loc[mask_nat, 'dt'] = pd.to_datetime(movs.loc[mask_nat, 'data_hora'], errors='coerce')
+        
+    precos = []
+    for _, row in movs.iterrows():
+        obs = str(row['observacao'])
+        match = re.search(r'Pago:\s*R\$\s*([\d\.,]+)', obs)
+        if match:
+            try:
+                p_str = match.group(1).replace('.', '').replace(',', '.')
+                precos.append(float(p_str))
+            except Exception:
+                precos.append(float(row['preco_atual']))
+        else:
+            precos.append(float(row['preco_atual']))
+            
+    movs['preco_pago'] = precos
+    return movs.sort_values(by='dt').reset_index(drop=True)
+
