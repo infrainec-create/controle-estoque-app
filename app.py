@@ -404,6 +404,12 @@ else:
         except Exception:
             pass
 
+    # Carrega DataFrames a partir das queries cacheadas
+    df = listar_produtos()
+    if not df.empty and "criticidade" not in df.columns:
+        df["criticidade"] = "Y"
+    mv = listar_movimentacoes()
+
     # Abas estruturadas conforme perfil do Operador
     tabs_disponiveis = ["📊 Painel", "⚡ Saídas/Entradas", "📋 INVENTÁRIO", "📜 Histórico", "📅 Cronograma"]
     is_admin = st.session_state.get("perfil_atual") == "Administrador"
@@ -412,13 +418,7 @@ else:
         tabs_disponiveis.extend(["🧠 IA Analista", "⚙️ Config"])
 
     # Renderiza a barra lateral modularizada (Sidebar com Navegação Vertical, Logoff, Timer e Status)
-    aba_selecionada = render_sidebar_ui(tabs_disponiveis)
-
-    # Carrega DataFrames a partir das queries cacheadas
-    df = listar_produtos()
-    if not df.empty and "criticidade" not in df.columns:
-        df["criticidade"] = "Y"
-    mv = listar_movimentacoes()
+    aba_selecionada = render_sidebar_ui(tabs_disponiveis, df)
 
     # Roteador visual delegando renderizações aos componentes conforme a aba vertical ativa no painel lateral
     if aba_selecionada == "📊 Painel":

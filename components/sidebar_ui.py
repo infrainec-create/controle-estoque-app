@@ -3,42 +3,67 @@ import streamlit.components.v1 as components
 from database.connection import get_conn
 from database.queries import registrar_log_auditoria
 
-def render_sidebar_ui(tabs_disponiveis=None):
+def render_sidebar_ui(tabs_disponiveis=None, df=None):
     """
     Renderiza a barra lateral (sidebar) com informações do operador,
-    menu de navegação vertical pelas abas do sistema, botão de logoff,
-    cronômetro de inatividade da sessão e status da nuvem.
+    menu de navegação vertical com badges dinâmicos de alerta,
+    botão de logoff, cronômetro de inatividade da sessão e status da nuvem.
     """
     aba_selecionada = None
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; margin-top: 5px; margin-bottom: 15px; font-weight: 800; font-size: 1.35rem;'>📦 WMS 5.0</h2>", unsafe_allow_html=True)
-        st.write(f"👤 Operador: **{st.session_state['usuario_atual']}**")
-        st.write(f"🛡️ Nível: **{st.session_state['perfil_atual']}**")
+        st.write(f"👤 Operador: **{st.session_state.get('usuario_atual', 'Operador')}**")
+        st.write(f"🛡️ Nível: **{st.session_state.get('perfil_atual', 'Operador')}**")
         
-        # Menu de Navegação Vertical (Abas no Painel Lateral)
+        # Leitura de métricas preventivas para exibir Badges visuais no Menu Lateral
+        n_alertas = 0
+        if df is not None and not df.empty:
+            n_rupturas = int((df['saldo_atual'] <= 0).sum())
+            n_criticos = int(((df['saldo_atual'] > 0) & (df['saldo_atual'] < df['estoque_minimo'])).sum())
+            n_alertas = n_rupturas + n_criticos
+
+        # Menu de Navegação Vertical (Abas no Painel Lateral com Badges)
         if tabs_disponiveis:
             st.markdown("---")
             st.markdown("<p style='font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: gray; letter-spacing: 1px; margin-bottom: 8px;'>📋 Navegação Principal</p>", unsafe_allow_html=True)
             
-            # Garantir que a aba ativa na sessão seja válida para o usuário atual
-            if "aba_ativa" not in st.session_state or st.session_state["aba_ativa"] not in tabs_disponiveis:
-                st.session_state["aba_ativa"] = tabs_disponiveis[0]
-                
-            aba_selecionada = st.radio(
+            labels_map = {}
+            options_display = []
+            
+            for t in tabs_disponiveis:
+                if t == "📊 Painel" and n_alertas > 0:
+                    lbl = f"📊 Painel ({n_alertas} 🚨)"
+                else:
+                    lbl = t
+                labels_map[lbl] = t
+                options_display.append(lbl)
+            
+            current_canonical = st.session_state.get("aba_ativa", tabs_disponiveis[0])
+            current_disp = options_display[0]
+            for lbl, can in labels_map.items():
+                if can == current_canonical:
+                    current_disp = lbl
+                    break
+                    
+            idx_default = options_display.index(current_disp) if current_disp in options_display else 0
+            
+            selected_disp = st.radio(
                 "Menu Principal",
-                options=tabs_disponiveis,
-                key="aba_ativa",
+                options=options_display,
+                index=idx_default,
+                key="sidebar_nav_radio",
                 label_visibility="collapsed"
             )
+            
+            aba_selecionada = labels_map.get(selected_disp, current_canonical)
+            st.session_state["aba_ativa"] = aba_selecionada
         
         st.markdown("---")
         
         # Botão de Logoff do Sistema
         if st.button("🚪 Sair do Sistema (Logoff)", type="primary", use_container_width=True):
-            # Registrar log de auditoria antes de limpar a sessão
             registrar_log_auditoria(st.session_state["usuario_atual"], "Logoff no Sistema", "Operador encerrou a sessão manualmente.")
             
-            # Deletar sessão persistente se existir
             session_token = st.query_params.get("session")
             if session_token:
                 try:
@@ -55,8 +80,8 @@ def render_sidebar_ui(tabs_disponiveis=None):
                 del st.session_state["ultimo_acesso"]
             st.rerun()
             
-        # Cronômetro de Sessão regressivo em tempo real (Iframe HTML/JS)
-        timer_html = f"<!-- timestamp: {int(st.session_state['ultimo_acesso'])} -->\n" + """
+        # Cronômetro de Sessão regressivo em tempo real
+        timer_html = f"<!-- timestamp: {int(st.session_state.get('ultimo_acesso', 0))} -->\n" + """
         <div style="
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             padding: 10px 14px;

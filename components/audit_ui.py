@@ -34,6 +34,23 @@ def render_audit_ui(df):
     aud_col3.metric("📦 Total para Audit", f"{len(df)} insumos")
     aud_col4.metric("👤 Auditado Por", st.session_state.get("usuario_atual", "Operador"))
 
+    # ─── BARRA DE PROGRESSO DA META CÍCLICA SEMANAL (7 DIAS) ───
+    agora_dt = obter_agora_fortaleza()
+    dt_7d_str = (agora_dt - pd.Timedelta(days=7)).strftime("%d/%m/%Y")
+    try:
+        with get_conn() as conn:
+            contados_sem_df = pd.read_sql("SELECT DISTINCT id_produto FROM movimentacoes WHERE tipo = 'Contagem' AND data_hora >= ?", conn, params=(dt_7d_str,))
+            ids_contados_sem = set(contados_sem_df['id_produto'].tolist())
+    except Exception:
+        ids_contados_sem = set(ids_contados_hoje)
+        
+    n_contados_sem = len(ids_contados_sem)
+    tot_itens_audit = len(df)
+    pct_semana = (n_contados_sem / tot_itens_audit) if tot_itens_audit > 0 else 0.0
+    
+    st.markdown(f"**📊 Meta Semanal de Auditoria Cíclica:** **{n_contados_sem}** de **{tot_itens_audit}** insumos auditados nos últimos 7 dias (**{pct_semana * 100:.1f}%**)")
+    st.progress(min(1.0, max(0.0, float(pct_semana))))
+
     st.divider()
 
     # ─── INVENTÁRIO CÍCLICO GUIADO POR INTELIGÊNCIA (MATRIZ ABC-XYZ) ───
@@ -78,8 +95,13 @@ def render_audit_ui(df):
 
     with st.container(border=True):
         st.markdown("##### ✏️ Registrar Nova Contagem Física")
+        
+        # Filtro por Setor para agilizar a seleção no inventário
+        setor_aud = st.selectbox("⚡ Filtrar Insumos por Setor:", ["Todos os Setores"] + list(df["categoria"].unique()), key="aud_setor")
+        df_aud_sel = df[df["categoria"] == setor_aud] if setor_aud != "Todos os Setores" else df
+        
         ops = {}
-        for _, row in df.iterrows():
+        for _, row in df_aud_sel.iterrows():
             nome_exib = f"✅ {row['nome']} (Auditado Hoje)" if row['id'] in ids_contados_hoje else row['nome']
             ops[nome_exib] = row['id']
         
