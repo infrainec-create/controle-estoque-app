@@ -31,6 +31,10 @@ def render_dashboard_ui(df):
         st.info("📦 **Bem-vindo ao WMS 5.0!** Atualmente não existem insumos cadastrados no inventário. Para começar, acesse a aba **⚙️ Config** e realize o cadastro dos seus produtos.")
         return
 
+    # Inicialização preventiva de escopo para parâmetros logísticos
+    janela_dias = 30
+    metodo_consumo = st.session_state.get("metodo_consumo", "movimentacoes")
+
     # Garantir compatibilidade se a coluna de criticidade não existir no dataframe carregado/cacheado
     if "criticidade" not in df.columns:
         df["criticidade"] = "Y"
@@ -95,7 +99,7 @@ def render_dashboard_ui(df):
             metodo_consumo_lbl = st.radio(
                 "Origem do consumo:",
                 options=["Saídas Registradas", "Inventário (Diferenças)"],
-                index=0,
+                index=0 if metodo_consumo != "inventario" else 1,
                 help="Saídas Registradas: soma as Saídas manuais e divergências de perda.\nInventário (Diferenças): calcula o consumo pela variação do saldo físico entre contagens semanais."
             )
             metodo_consumo = "movimentacoes" if metodo_consumo_lbl == "Saídas Registradas" else "inventario"
