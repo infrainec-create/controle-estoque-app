@@ -296,10 +296,46 @@ def render_audit_ui(df):
 
             st.divider()
 
-            # --- TABELA DETALHADA COM EXPORTAÇÃO ---
+            st.divider()
+
+            # --- TABELA DETALHADA COM FILTROS INTERATIVOS, SUB-TOTALIZADORES E EXPORTAÇÃO ---
             st.markdown("##### 📋 Tabela Analítica de Divergências de Inventário")
             
-            df_display_aud = hist_inv_filtrado[[
+            col_flt1, col_flt2 = st.columns([2, 2])
+            with col_flt1:
+                tipo_div_filtro = st.radio(
+                    "Filtrar Registros por Divergência:",
+                    ["🔘 Todas", "🔴 Apenas Faltas (-)", "🟢 Apenas Sobras (+)", "⚪ Exatas (0)"],
+                    horizontal=True,
+                    key="radio_div_filtro"
+                )
+            with col_flt2:
+                busca_div_txt = st.text_input("🔍 Pesquisa por Insumo, Setor ou Causa Raiz:", key="txt_search_div")
+                
+            df_filtrado_tabela = hist_inv_filtrado.copy()
+            if "Apenas Faltas" in tipo_div_filtro:
+                df_filtrado_tabela = df_filtrado_tabela[df_filtrado_tabela['Divergência (un)'] < 0]
+            elif "Apenas Sobras" in tipo_div_filtro:
+                df_filtrado_tabela = df_filtrado_tabela[df_filtrado_tabela['Divergência (un)'] > 0]
+            elif "Exatas" in tipo_div_filtro:
+                df_filtrado_tabela = df_filtrado_tabela[df_filtrado_tabela['Divergência (un)'] == 0]
+
+            if busca_div_txt.strip():
+                termo = busca_div_txt.strip().lower()
+                mask_txt = (
+                    df_filtrado_tabela['Produto'].str.lower().str.contains(termo) |
+                    df_filtrado_tabela['Setor'].str.lower().str.contains(termo) |
+                    df_filtrado_tabela['Registro / Causa Raiz'].str.lower().str.contains(termo)
+                )
+                df_filtrado_tabela = df_filtrado_tabela[mask_txt]
+
+            n_exib = len(df_filtrado_tabela)
+            sub_div_un = df_filtrado_tabela['Divergência (un)'].sum() if n_exib > 0 else 0
+            sub_imp_fin = df_filtrado_tabela['Impacto Financeiro (R$)'].sum() if n_exib > 0 else 0.0
+            
+            st.info(f"📊 **Subtotal da Seleção Filtrada:** **{n_exib}** registros exibidos | Saldo Físico Ajustado: **{int(sub_div_un):+} un.** | Impacto Financeiro Subtotal: **R$ {sub_imp_fin:,.2f}**")
+            
+            df_display_aud = df_filtrado_tabela[[
                 'Data/Hora', 'Setor', 'Produto', 'Saldo Anterior', 'Contagem Física', 
                 'Divergência (un)', 'Preço Unit.', 'Impacto Financeiro (R$)', 'Registro / Causa Raiz'
             ]].copy()
@@ -321,15 +357,33 @@ def render_audit_ui(df):
                 use_container_width=True
             )
 
-            # Botão de Exportação CSV / Excel da Auditoria
-            csv_aud = df_display_aud.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                "📥 Baixar Relatório de Divergências de Inventário (.csv / Excel)",
-                data=csv_aud,
-                file_name=f"Relatorio_Divergencias_Inventario_{obter_agora_fortaleza().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=False
-            )
+            # Botões de Exportação CSV / Excel da Auditoria
+            col_exp1, col_exp2 = st.columns([1, 1])
+            with col_exp1:
+                csv_aud = df_display_aud.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    "📄 Baixar Tabela de Divergências (.csv)",
+                    data=csv_aud,
+                    file_name=f"Divergencias_Inventario_{obter_agora_fortaleza().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            with col_exp2:
+                try:
+                    import io
+                    output_excel = io.BytesIO()
+                    with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
+                        df_display_aud.to_excel(writer, sheet_name='Divergencias', index=False)
+                    excel_data = output_excel.getvalue()
+                    st.download_button(
+                        "📊 Baixar Planilha Excel Formata (.xlsx)",
+                        data=excel_data,
+                        file_name=f"Divergencias_Inventario_{obter_agora_fortaleza().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                except Exception:
+                    pass
         else:
             st.warning("⚠️ Nenhum registro de inventário encontrado para o período selecionado.")
     else:
