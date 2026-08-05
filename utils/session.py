@@ -1,6 +1,8 @@
 import time
-import streamlit as st
 from datetime import datetime, timedelta
+
+import streamlit as st
+
 from database.connection import get_conn
 from database.queries import registrar_log_auditoria
 

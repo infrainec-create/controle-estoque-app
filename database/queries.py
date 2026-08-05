@@ -1,7 +1,9 @@
-import streamlit as st
 import pandas as pd
-from database.connection import get_conn, retry_db_operation, DB_PATH
+import streamlit as st
+
+from database.connection import DB_PATH, get_conn, retry_db_operation
 from utils.date_helpers import formatar_timestamp_utc
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def listar_produtos():

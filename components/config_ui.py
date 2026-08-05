@@ -1,8 +1,15 @@
 import pandas as pd
 import streamlit as st
+
 from database.connection import get_conn
-from database.queries import cadastrar_produto, editar_produto, deletar_produto, registrar_log_auditoria
+from database.queries import (
+    cadastrar_produto,
+    deletar_produto,
+    editar_produto,
+    registrar_log_auditoria,
+)
 from utils.drive_sync import disparar_sincronizacao
+
 
 def render_config_ui(df):
     st.subheader("⚙️ Configurações & Governança do WMS 5.0")
@@ -191,8 +198,9 @@ def render_config_ui(df):
         st.caption("Quando desligado, todas as ações continuam localmente e a nuvem não é atualizada. Use o botão de envio para sincronizar manualmente.")
     with col_btn1:
         if st.button("📤 Enviar para Nuvem", type="secondary", use_container_width=True):
-            from datetime import datetime
             import threading
+            from datetime import datetime
+
             from utils.drive_sync import executar_sincronizacao_drive
             
             with get_conn() as conn:
@@ -306,9 +314,15 @@ def render_config_ui(df):
     st.markdown("### 📥 Central de Relatórios Premium WMS 5.0")
     st.caption("Gere e exporte planilhas profissionais no formato Excel (.xlsx) e relatórios executivos em alta definição formatados para impressão em PDF.")
     
-    from utils.reports import gerar_excel_estoque, gerar_excel_movimentacoes, gerar_excel_auditoria, gerar_html_pdf_estoque
-    from database.queries import listar_movimentacoes
     from datetime import datetime
+
+    from database.queries import listar_movimentacoes
+    from utils.reports import (
+        gerar_excel_auditoria,
+        gerar_excel_estoque,
+        gerar_excel_movimentacoes,
+        gerar_html_pdf_estoque,
+    )
     
     col_rep1, col_rep2 = st.columns(2)
     

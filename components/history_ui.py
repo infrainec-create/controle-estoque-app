@@ -1,7 +1,10 @@
 import math
+
 import pandas as pd
 import streamlit as st
+
 from utils.reports import gerar_excel_movimentacoes
+
 
 def render_history_ui(df, mv):
     st.subheader("📜 Histórico Geral & Audit de Movimentações")

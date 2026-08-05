@@ -1,7 +1,14 @@
 import streamlit as st
-from utils.drive_sync import disparar_sincronizacao
-from database.queries import registrar_log_auditoria, registrar_entrada_produto, registrar_saida_produto, listar_movimentacoes
+
+from database.queries import (
+    listar_movimentacoes,
+    registrar_entrada_produto,
+    registrar_log_auditoria,
+    registrar_saida_produto,
+)
 from utils.backup import realizar_backup_local
+from utils.drive_sync import disparar_sincronizacao
+
 
 def render_operations_ui(df):
     st.subheader("⚡ Lançamentos Operacionais de Estoque")

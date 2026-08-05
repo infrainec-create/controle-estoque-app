@@ -1,25 +1,26 @@
 import streamlit as st
 
+from components.ai_assistant_ui import render_ai_assistant_ui
+from components.audit_ui import render_audit_ui
+
+# Importações de Componentes Visuais de UI
+from components.auth_ui import render_auth_ui
+from components.config_ui import render_config_ui
+from components.dashboard_ui import render_dashboard_ui
+from components.history_ui import render_history_ui
+from components.operations_ui import render_operations_ui
+from components.schedule_ui import render_schedule_ui
+from components.sidebar_ui import render_sidebar_ui
+
 # ─────────────────────────────────────────────────────────────
 # IMPORTAÇÃO DE MÓDULOS INTERNOS MODULARIZADOS
 # ─────────────────────────────────────────────────────────────
 from database.connection import get_conn
+from database.queries import listar_movimentacoes, listar_produtos
 from database.schema import init_db
-from database.queries import listar_produtos, listar_movimentacoes
-from utils.security import inicializar_estados_sessao
 from utils.drive_sync import sincronizar_banco_na_inicializacao
+from utils.security import inicializar_estados_sessao
 from utils.session import gerenciar_timeout_sessao, recuperar_sessao_persistente
-
-# Importações de Componentes Visuais de UI
-from components.auth_ui import render_auth_ui
-from components.sidebar_ui import render_sidebar_ui
-from components.dashboard_ui import render_dashboard_ui
-from components.operations_ui import render_operations_ui
-from components.audit_ui import render_audit_ui
-from components.history_ui import render_history_ui
-from components.ai_assistant_ui import render_ai_assistant_ui
-from components.config_ui import render_config_ui
-from components.schedule_ui import render_schedule_ui
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURAÇÃO DA PÁGINA E CSS RESPONSIVO SEGURO
@@ -300,7 +301,7 @@ if "db_sincronizado" not in st.session_state:
                 </p>
                 <div style="background-color: rgba(0, 0, 0, 0.2); padding: 15px; border-radius: 10px; border-left: 5px solid #FF4B4B; text-align: left; margin: 0 auto; max-width: 600px; font-family: monospace; font-size: 0.95rem;">
                     <strong>Erro Técnico:</strong><br>
-                    {str(e)}
+                    {e!s}
                 </div>
                 <p style="margin-top: 25px; font-size: 1.05rem;">
                     Para evitar a criação de um banco de dados em branco (o que poderia sobrescrever seu estoque real), o sistema foi bloqueado por segurança.

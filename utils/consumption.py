@@ -1,6 +1,9 @@
-import pandas as pd
 from datetime import datetime, timedelta, timezone
+
+import pandas as pd
+
 from database.connection import get_conn
+
 
 def obter_agora_fortaleza():
     try:

@@ -1,6 +1,9 @@
 import datetime
-from datetime import datetime as dt, timezone
+from datetime import datetime as dt
+from datetime import timezone
+
 from database.connection import get_conn
+
 
 def formatar_timestamp_utc(data_hora=None, padrao="%d/%m/%Y %H:%M:%S"):
     """Retorna a data/hora atual em UTC no formato especificado."""

@@ -1,11 +1,18 @@
 import datetime
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 import streamlit as st
-from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega, obter_parametros_cronograma
+
 from database.connection import get_conn
 from database.queries import registrar_log_auditoria
+from utils.date_helpers import (
+    calcular_previsao_entrega,
+    obter_cronograma_mes,
+    obter_parametros_cronograma,
+)
 from utils.drive_sync import disparar_sincronizacao
+
 
 def render_schedule_ui(df):
     st.subheader("📅 Cronograma Integrado de Suprimentos & Prazos Logísticos")

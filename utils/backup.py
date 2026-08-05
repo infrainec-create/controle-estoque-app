@@ -1,5 +1,5 @@
-import os
 import glob
+import os
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,10 +20,10 @@ def realizar_backup_local():
         
         # Cria cópia física segura usando SQLite Online Backup API
         import sqlite3
+
         from database.connection import get_conn
-        with get_conn() as conn_src:
-            with sqlite3.connect(dest_path) as conn_dst:
-                conn_src.backup(conn_dst)
+        with get_conn() as conn_src, sqlite3.connect(dest_path) as conn_dst:
+            conn_src.backup(conn_dst)
         
         # Gerenciamento rotativo: listar todos os backups e deletar os mais antigos se passar de 5
         backups_existentes = sorted(glob.glob(os.path.join(BACKUP_DIR, "estoque_backup_*.db")))

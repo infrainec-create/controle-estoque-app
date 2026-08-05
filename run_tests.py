@@ -1,11 +1,13 @@
 import os
 import sys
 import unittest
+
 import pandas as pd
 
 # --- CONFIGURAÇÃO DO AMBIENTE DE TESTE ---
 # Redireciona o banco de dados para um arquivo temporário de teste
 import database.connection
+
 TEST_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "estoque_teste.db")
 database.connection.DB_PATH = TEST_DB_PATH
 
@@ -18,25 +20,26 @@ for suffix in ["-wal", "-shm"]:
         os.remove(extra_file)
 
 # Importa os módulos do sistema para testar após a alteração do DB_PATH
-from database.schema import init_db  # noqa: E402
-from database.queries import (  # noqa: E402
-    listar_produtos,
+import streamlit as st
+
+from database.queries import (
     cadastrar_produto,
-    editar_produto,
     deletar_produto,
-    registrar_log_auditoria,
+    editar_produto,
+    listar_produtos,
     registrar_entrada_produto,
-    registrar_saida_produto
+    registrar_log_auditoria,
+    registrar_saida_produto,
 )
-from utils.security import gerar_hash_senha  # noqa: E402
-from utils.reports import (  # noqa: E402
+from database.schema import init_db
+from utils.reports import (
+    gerar_excel_auditoria,
     gerar_excel_estoque,
     gerar_excel_movimentacoes,
-    gerar_excel_auditoria,
-    gerar_html_pdf_estoque
+    gerar_html_pdf_estoque,
 )
+from utils.security import gerar_hash_senha
 
-import streamlit as st  # noqa: E402
 
 class TestWMSRegression(unittest.TestCase):
     
@@ -190,7 +193,8 @@ class TestWMSRegression(unittest.TestCase):
     def test_05_date_helpers_crono(self):
         print("Teste 5: Validando cálculos do cronograma de compras...")
         import datetime
-        from utils.date_helpers import obter_cronograma_mes, calcular_previsao_entrega
+
+        from utils.date_helpers import calcular_previsao_entrega, obter_cronograma_mes
         
         # Testar ciclo de Julho 2026 (Solicitação no último dia útil de Junho = 30/06/2026)
         crono = obter_cronograma_mes(2026, 7)
@@ -211,8 +215,8 @@ class TestWMSRegression(unittest.TestCase):
 
     def test_06_consumption_calculation(self):
         print("Teste 6: Validando cálculo de consumo e previsão (Movimentações vs Inventário)...")
-        from utils.consumption import processar_consumo_produtos
         from database.connection import get_conn
+        from utils.consumption import processar_consumo_produtos
         
         # A. Cadastrar produto de teste para consumo
         sucesso, msg = cadastrar_produto(

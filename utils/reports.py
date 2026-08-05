@@ -1,10 +1,13 @@
-import io
-import pandas as pd
-import numpy as np
 import datetime
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+import io
+
+import numpy as np
+import pandas as pd
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
 from database.connection import get_conn
+
 
 def formatar_aba_excel(ws, title_color="1E3A8A"):
     """
@@ -275,7 +278,10 @@ def gerar_html_pdf_estoque(df, mv, logs, metodo=None, janela_dias=30):
     Compila um relatório executivo de alta fidelidade visual (HTML) otimizado para salvamento em PDF / Impressão,
     incluindo Valuation, Análise Preditiva de Demanda (30/60/90 dias) e Custo de Posse de Estoque (Carrying Cost).
     """
-    from utils.consumption import calcular_previsao_demanda_preditiva, calcular_custo_posse_estoque
+    from utils.consumption import (
+        calcular_custo_posse_estoque,
+        calcular_previsao_demanda_preditiva,
+    )
     
     # 1. Carregar método da sessão se não fornecido
     if metodo is None:

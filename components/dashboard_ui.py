@@ -1,20 +1,23 @@
 from datetime import datetime
+
+import numpy as np
 import pandas as pd
-import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
+import streamlit as st
+
 from database.connection import get_conn
 from database.queries import listar_movimentacoes
 from utils.consumption import (
-    processar_consumo_produtos, 
-    calcular_previsao_demanda_preditiva, 
     calcular_custo_posse_estoque,
     calcular_matriz_kraljic,
-    obter_historico_precos_insumos
+    calcular_previsao_demanda_preditiva,
+    obter_historico_precos_insumos,
+    processar_consumo_produtos,
 )
 from utils.date_helpers import calcular_previsao_entrega
 from utils.reports import gerar_html_pdf_estoque
+
 
 def apply_premium_chart_theme(fig, is_dual_axis=False):
     layout_update = dict(

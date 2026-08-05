@@ -1,11 +1,13 @@
 import pandas as pd
-import streamlit as st
 import plotly.express as px
+import streamlit as st
+
 from database.connection import get_conn
-from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
 from utils.backup import realizar_backup_local
 from utils.consumption import obter_agora_fortaleza
+from utils.drive_sync import disparar_sincronizacao
+
 
 def apply_chart_theme(fig):
     fig.update_layout(

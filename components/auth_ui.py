@@ -1,10 +1,13 @@
 import uuid
 from datetime import datetime
+
 import streamlit as st
+
 from database.connection import get_conn
-from utils.security import gerar_hash_senha, normalizar_usuario
-from utils.drive_sync import disparar_sincronizacao
 from database.queries import registrar_log_auditoria
+from utils.drive_sync import disparar_sincronizacao
+from utils.security import gerar_hash_senha, normalizar_usuario
+
 
 def render_auth_ui():
     # Injetar fontes modernas (Inter) e estilos CSS responsivos de altíssima qualidade

@@ -1,7 +1,9 @@
+import google.generativeai as genai
 import pandas as pd
 import streamlit as st
-import google.generativeai as genai
+
 from database.connection import get_conn
+
 
 @st.cache_data(ttl=3600)
 def obter_modelos_gemini(api_key):

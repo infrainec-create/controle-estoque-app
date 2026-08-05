@@ -4,8 +4,9 @@ Script de Monitoramento e Auditoria de Qualidade de Código WMS 5.0
 Executa análise estática de código (Ruff), testes de integração e relatório de saúde.
 """
 
-import sys
 import subprocess
+import sys
+
 
 def run_command(cmd, desc):
     print(f"\n🔍 [MONITOR] {desc}...")

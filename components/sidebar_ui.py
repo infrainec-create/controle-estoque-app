@@ -1,7 +1,9 @@
 import streamlit as st
 import streamlit.components.v1 as components
+
 from database.connection import get_conn
 from database.queries import registrar_log_auditoria
+
 
 def render_sidebar_ui(tabs_disponiveis=None, df=None):
     """

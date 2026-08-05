@@ -1,7 +1,9 @@
-import sqlite3
 import random
+import sqlite3
 from datetime import datetime, timedelta
+
 from database.connection import get_conn
+
 
 def init_db():
     with get_conn() as conn:
